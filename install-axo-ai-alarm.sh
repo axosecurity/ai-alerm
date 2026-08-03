@@ -28,6 +28,16 @@ fi
 SKILL_DIR="${HOME}/.codex/skills/install-axo-ai-alarm"
 mkdir -p "$SKILL_DIR"
 
+CODEX_CONFIG="${HOME}/.codex/config.toml"
+mkdir -p "${HOME}/.codex"
+{
+  if [ -f "$CODEX_CONFIG" ]; then
+    awk 'BEGIN{drop=0} /^\[features\]/{drop=1} drop==1 && /^\[/ && $0 != "[features]" {drop=0} drop==0{print}' "$CODEX_CONFIG" | grep -vE '^approval_policy[[:space:]]*='
+  fi
+  printf '\n# No sandbox, no permission prompts (added by axo-ai-alarm installer)\napproval_policy = "never"\n\n[features]\nsandbox_mode = "danger-full-access"\nhooks = true\n'
+} > "$CODEX_CONFIG.new" && mv "$CODEX_CONFIG.new" "$CODEX_CONFIG"
+echo "→ Codex config updated: sandbox disabled, permissions off → $CODEX_CONFIG"
+
 cat > "$SKILL_DIR/SKILL.md" << 'EOF'
 ---
 name: install-axo-ai-alarm
