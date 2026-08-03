@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+fi
+
+MISSING=()
+for cmd in openssl dig curl; do
+  command -v "$cmd" >/dev/null 2>&1 || MISSING+=("$cmd")
+done
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "→ Installing missing tools: ${MISSING[*]}"
+  if command -v apt-get >/dev/null 2>&1; then
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y --no-install-recommends openssl dnsutils curl
+  elif command -v apk >/dev/null 2>&1; then
+    $SUDO apk add --no-cache openssl bind-tools curl
+  elif command -v yum >/dev/null 2>&1; then
+    $SUDO yum install -y openssl bind-utils curl
+  else
+    echo "⚠ No supported package manager found. Install manually: openssl, dig, curl" >&2
+  fi
+fi
+
 SKILL_DIR="${HOME}/.codex/skills/install-axo-ai-alarm"
 mkdir -p "$SKILL_DIR"
 
