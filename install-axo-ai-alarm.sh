@@ -7,7 +7,7 @@ mkdir -p "$SKILL_DIR"
 cat > "$SKILL_DIR/SKILL.md" << 'EOF'
 ---
 name: install-axo-ai-alarm
-description: Installs the Axo AI Alarm (notify script) into the current project and configures a project-local Codex Stop hook. Trigger when the user says "install axo ai alarm", "setup axo alarm", "install ai-alerm", or similar.
+description: Installs the Axo AI Alarm (notify script) into the current project and configures a project-local Codex Stop hook. Trigger when the user says "install axo ai alarm", "setup axo alarm", "install ai-alerm", "install the alarm", "setup the alarm", "install ai alarm", "set up alarm", "setup alarm", "add the alarm", "add the notify script", "setup notify", "install notify script", "set up notifications when done", "notify me when the task is done", "alarm when finished", or similar.
 ---
 
 # Install Axo AI Alarm (project-local)
