@@ -1,0 +1,3 @@
+#!/bin/bash
+
+afplay "$(dirname "$0")/alarm_sound.mp3"
