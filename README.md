@@ -168,10 +168,96 @@ Does custom sound exist? (~/.ai-alarm/alarm_sound_claude.mp3)
 
 ---
 
+---
+
+## 🎛️ Volume, Mute & Notification Banners
+
+Customize audio levels, quiet down when on a call, or enable native OS desktop toasts:
+
+```bash
+# Volume control (0 - 100%)
+alarm volume 60        # Set volume to 60%
+alarm volume           # View current volume and visual progress bar
+
+# Instant mute / silent mode
+alarm mute             # Mute audio (desktop notification toasts will still fire)
+alarm unmute           # Unmute audio and restore playback
+
+# Native desktop notification banners (macOS Notification Center / Linux notify-send)
+alarm notify on        # Enable desktop notification toasts
+alarm notify off       # Disable desktop toasts
+alarm notify           # Check desktop notification status
+```
+
+---
+
+## 📊 Status & Configuration Dashboard
+
+View your active audio volume, mute state, desktop banners, assigned sounds per agent, and hook health across all AI tools:
+
+```bash
+alarm status
+# or
+./install.sh --status
+```
+
+```text
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STATUS & CONFIGURATION                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  AUDIO SETTINGS
+  ───────────────
+  🔊 Volume:              80%  [████████░░]
+  🔇 Mute State:          Active 🔊 (Audio enabled)
+  🔔 Desktop Banners:     Enabled 🔔 (Native notification toasts)
+
+  ASSIGNED SOUNDS
+  ───────────────
+  🌐 Global Default:      allahuakabar-laillahillah-zikir.mp3 ("Takbeer & Tahleel Zikir") (16.4s) [zikir]
+  🟣 Claude Code:         shoddurud-sharif.mp3 ("Choto Durood Sharif") (7.7s) [durood]
+  🟢 OpenAI Codex:        istighfar.mp3 ("Astaghfirullah (Short Istighfar)") (11.0s) [istighfar]
+  🔵 Antigravity:         (uses Global Default)
+  🟡 OpenCode:            (uses Global Default)
+
+  AGENT HOOK INTEGRATIONS
+  ───────────────────────
+  🟣 Claude Code:         ✓ Configured (~/.claude/settings.json)
+  🟢 OpenAI Codex:        ✓ Configured (~/.codex/config.toml)
+  🔵 Google Antigravity:  ✓ Configured (~/.gemini/config/hooks.json)
+  🟡 OpenCode:            ✓ Configured (~/.config/opencode/plugins/)
+  📂 Project Workspace:   ○ None
+
+  SYSTEM & PATHS
+  ──────────────
+  📁 Sound Library:       ~/.ai-alarm/sound (4 tracks)
+  ⚙️  Config File:         ~/.ai-alarm/config.json
+  🚀 Alarm Command:       /opt/homebrew/bin/alarm
+```
+
+---
+
+## 🗑️ Clean Uninstallation
+
+Completely remove all agent hooks, symlinks, binaries, and configurations with zero leftover clutter:
+
+```bash
+alarm uninstall
+# or
+./install.sh --uninstall
+```
+
+---
+
 ## 🛠 Commands Reference
 
 * **`alarm`**: Plays current alarm sound (auto-detects calling agent).
 * **`alarm <agent>`**: Plays custom sound for a specific agent (`claude`, `codex`, `antigravity`, `opencode`).
+* **`alarm status`** / **`info`**: Displays configuration dashboard and agent hook health.
+* **`alarm volume [0-100]`**: Adjusts or inspects alert volume with a visual bar.
+* **`alarm mute`**: Silences audio playback while retaining notification toasts.
+* **`alarm unmute`**: Restores audio alerts.
+* **`alarm notify [on|off]`**: Controls native OS desktop notification banners.
 * **`alarm --select`** / **`-s`**: Launches the interactive audio selector.
 * **`alarm search <query>`**: Searches sounds by title, description, or tag.
 * **`alarm update`** / **`sync`**: Downloads latest community sounds from GitHub.
@@ -179,6 +265,7 @@ Does custom sound exist? (~/.ai-alarm/alarm_sound_claude.mp3)
 * **`alarm add <path|url>`**: Imports a custom sound or downloads from URL.
 * **`alarm open`**: Opens sound library directory in Finder.
 * **`alarm remove <name>`**: Removes a sound file from library.
+* **`alarm uninstall`**: Cleanly removes all agent hooks, binaries, and configurations.
 * **`alarm -help`** / **`-ask`** / **`--help`**: Opens the comprehensive CLI manual.
 * **`notify`**: Sends task-completion notifications to your configured Slack webhook.
 

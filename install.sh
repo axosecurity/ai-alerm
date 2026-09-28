@@ -27,20 +27,316 @@ USAGE:
 
 OPTIONS:
     --select-only [agent]   Launch interactive sound selector (-s)
+    --status                Show status and configuration dashboard
     --search <query>        Search sound library by name, tag, or description
     --update                Update community sound library from GitHub (sync)
     --add <path|url>        Import custom sound to ~/.ai-alarm/sound/
     --open                  Open sound library in Finder / File Manager
     --remove <name>         Remove sound track from library
     --project               Also write hook to project workspace (.agents/hooks.json)
+    --uninstall             Cleanly remove all hooks, binaries, and data
     --help | -help          Show this documentation manual (-h, --ask, -ask)
 EOF
   exit 0
 }
 
+show_status_dashboard() {
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const home = process.env.HOME;
+    const installDir = path.join(home, ".ai-alarm");
+    const soundDir = path.join(installDir, "sound");
+    const configFile = path.join(installDir, "config.json");
+
+    let config = { volume: 80, muted: false, desktop_notifications: true };
+    if (fs.existsSync(configFile)) {
+      try { config = Object.assign(config, JSON.parse(fs.readFileSync(configFile, "utf8"))); } catch(e){}
+    }
+
+    const vol = Math.max(0, Math.min(100, Number(config.volume) !== undefined ? Number(config.volume) : 80));
+    const filled = Math.round(vol / 10);
+    const bar = "█".repeat(filled) + "░".repeat(10 - filled);
+
+    let catalog = {};
+    const catFile = path.join(soundDir, "sounds.json");
+    if (fs.existsSync(catFile)) {
+      try { catalog = JSON.parse(fs.readFileSync(catFile, "utf8")); } catch(e){}
+    }
+
+    function getSoundInfo(linkName) {
+      const linkPath = path.join(installDir, linkName);
+      if (fs.existsSync(linkPath)) {
+        try {
+          const target = fs.readlinkSync(linkPath);
+          const base = path.basename(target);
+          const meta = catalog[base] || {};
+          let info = `\x1b[1;32m${base}\x1b[0m`;
+          if (meta.title && meta.title !== base) info += ` ("${meta.title}")`;
+          if (meta.duration) info += ` (${meta.duration})`;
+          if (meta.category) info += ` [\x1b[36m${meta.category}\x1b[0m]`;
+          return info;
+        } catch(e){}
+      }
+      return null;
+    }
+
+    const defaultSound = getSoundInfo("alarm_sound.mp3") || "\x1b[33m(none configured)\x1b[0m";
+    const claudeSound = getSoundInfo("alarm_sound_claude.mp3") || `\x1b[2m(uses Global Default)\x1b[0m`;
+    const codexSound = getSoundInfo("alarm_sound_codex.mp3") || `\x1b[2m(uses Global Default)\x1b[0m`;
+    const antigravitySound = getSoundInfo("alarm_sound_antigravity.mp3") || `\x1b[2m(uses Global Default)\x1b[0m`;
+    const opencodeSound = getSoundInfo("alarm_sound_opencode.mp3") || `\x1b[2m(uses Global Default)\x1b[0m`;
+
+    let soundCount = 0;
+    if (fs.existsSync(soundDir)) {
+      soundCount = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f)).length;
+    }
+
+    const claudePath = path.join(home, ".claude", "settings.json");
+    let claudeStatus = "\x1b[31m○ Not installed\x1b[0m";
+    if (fs.existsSync(claudePath)) {
+      try {
+        const c = JSON.parse(fs.readFileSync(claudePath, "utf8"));
+        const hasHook = (c.hooks?.Stop || []).some(item => (item.hooks || []).some(h => (h.command || "").includes("alarm")));
+        claudeStatus = hasHook ? "\x1b[1;32m✓ Configured\x1b[0m (~/.claude/settings.json)" : "\x1b[33m○ Not configured\x1b[0m";
+      } catch(e) { claudeStatus = "\x1b[33m○ Error parsing\x1b[0m"; }
+    }
+
+    const codexPath = path.join(home, ".codex", "config.toml");
+    let codexStatus = "\x1b[31m○ Not installed\x1b[0m";
+    if (fs.existsSync(codexPath)) {
+      const content = fs.readFileSync(codexPath, "utf8");
+      const hasHook = content.includes("[[hooks.Stop]]") && content.includes("alarm");
+      codexStatus = hasHook ? "\x1b[1;32m✓ Configured\x1b[0m (~/.codex/config.toml)" : "\x1b[33m○ Not configured\x1b[0m";
+    }
+
+    const agyPath = path.join(home, ".gemini", "config", "hooks.json");
+    let agyStatus = "\x1b[31m○ Not installed\x1b[0m";
+    if (fs.existsSync(agyPath)) {
+      try {
+        const h = JSON.parse(fs.readFileSync(agyPath, "utf8"));
+        const hasHook = Boolean(h["task-finished-alarm"]);
+        agyStatus = hasHook ? "\x1b[1;32m✓ Configured\x1b[0m (~/.gemini/config/hooks.json)" : "\x1b[33m○ Not configured\x1b[0m";
+      } catch(e) { agyStatus = "\x1b[33m○ Error parsing\x1b[0m"; }
+    }
+
+    const opencodePath = path.join(home, ".config", "opencode", "plugins", "task-finished-alarm.ts");
+    let opencodeStatus = fs.existsSync(opencodePath) ? "\x1b[1;32m✓ Configured\x1b[0m (~/.config/opencode/plugins/)" : "\x1b[31m○ Not installed\x1b[0m";
+
+    const wsPath = path.join(process.cwd(), ".agents", "hooks.json");
+    let wsStatus = "\x1b[2m○ None\x1b[0m";
+    if (fs.existsSync(wsPath)) {
+      try {
+        const w = JSON.parse(fs.readFileSync(wsPath, "utf8"));
+        if (w["task-finished-alarm"]) wsStatus = "\x1b[1;32m✓ Configured\x1b[0m (.agents/hooks.json)";
+      } catch(e){}
+    }
+
+    console.log(`
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STATUS & CONFIGURATION                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  \x1b[1mAUDIO SETTINGS\x1b[0m
+  ───────────────
+  🔊 Volume:              \x1b[1;33m${vol}%\x1b[0m  [\x1b[32m${bar}\x1b[0m]
+  🔇 Mute State:          ${config.muted ? "\x1b[1;31mMuted 🔇 (Silent mode)\x1b[0m" : "\x1b[1;32mActive 🔊 (Audio enabled)\x1b[0m"}
+  🔔 Desktop Banners:     ${config.desktop_notifications !== false ? "\x1b[1;32mEnabled 🔔 (Native notification toasts)\x1b[0m" : "\x1b[33mDisabled 🔕\x1b[0m"}
+
+  \x1b[1mASSIGNED SOUNDS\x1b[0m
+  ───────────────
+  🌐 Global Default:      ${defaultSound}
+  🟣 Claude Code:         ${claudeSound}
+  🟢 OpenAI Codex:        ${codexSound}
+  🔵 Antigravity:         ${antigravitySound}
+  🟡 OpenCode:            ${opencodeSound}
+
+  \x1b[1mAGENT HOOK INTEGRATIONS\x1b[0m
+  ───────────────────────
+  🟣 Claude Code:         ${claudeStatus}
+  🟢 OpenAI Codex:        ${codexStatus}
+  🔵 Google Antigravity:  ${agyStatus}
+  🟡 OpenCode:            ${opencodeStatus}
+  📂 Project Workspace:   ${wsStatus}
+
+  \x1b[1mSYSTEM & PATHS\x1b[0m
+  ──────────────
+  📁 Sound Library:       ${soundDir} (${soundCount} tracks)
+  ⚙️  Config File:         ${configFile}
+  🚀 Alarm Command:       ${process.argv[1] || "alarm"}
+`);
+  ' "$(which alarm 2>/dev/null || echo "$INSTALL_DIR/alarm")"
+}
+
+run_uninstall() {
+  local auto_yes=false
+  if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ]; then
+    auto_yes=true
+  fi
+
+  echo ""
+  echo "╔═══════════════════════════════════════════════════════════╗"
+  echo "║                  AI-ALARM UNINSTALLER                     ║"
+  echo "╚═══════════════════════════════════════════════════════════╝"
+  echo ""
+
+  if [ "$auto_yes" = false ] && [ -t 0 -o -r "/dev/tty" ]; then
+    local TTY_DEV="/dev/tty"
+    [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
+    printf "Are you sure you want to uninstall AI-Alarm and remove all agent hooks? [y/N]: "
+    read -r confirm < "$TTY_DEV" || confirm="n"
+    if [[ ! "$confirm" =~ ^[yY](es)?$ ]]; then
+      echo "Uninstall canceled."
+      return 0
+    fi
+  fi
+
+  echo ""
+  echo "→ Removing agent hooks..."
+
+  # 1. Claude Code
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const p = path.join(process.env.HOME, ".claude", "settings.json");
+    if (!fs.existsSync(p)) return;
+    try {
+      let s = JSON.parse(fs.readFileSync(p, "utf8"));
+      if (s.hooks && s.hooks.Stop) {
+        s.hooks.Stop = s.hooks.Stop.filter(item => {
+          if (!item.hooks) return true;
+          item.hooks = item.hooks.filter(h => !(h.command && h.command.includes("alarm")));
+          return item.hooks.length > 0;
+        });
+        if (s.hooks.Stop.length === 0) delete s.hooks.Stop;
+        if (Object.keys(s.hooks).length === 0) delete s.hooks;
+        fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n");
+        console.log("  ✓ Removed Claude Code Stop hook (~/.claude/settings.json)");
+      }
+    } catch(e){}
+  ' 2>/dev/null || true
+
+  # 2. OpenAI Codex
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const p = path.join(process.env.HOME, ".codex", "config.toml");
+    if (!fs.existsSync(p)) return;
+    try {
+      let content = fs.readFileSync(p, "utf8");
+      if (content.includes("alarm")) {
+        const regex = /\[\[hooks\.Stop\]\][\s\S]*?command\s*=\s*".*?alarm.*?"[\s\S]*?(?=\n\[|\n$|$)/g;
+        content = content.replace(regex, "");
+        const stateRegex = /\[hooks\.state\."[^"]*:stop:[^"]*"\]\ntrusted_hash\s*=\s*"[^"]*"\n?/g;
+        content = content.replace(stateRegex, "");
+        content = content.replace(/\n{3,}/g, "\n\n");
+        fs.writeFileSync(p, content);
+        console.log("  ✓ Removed OpenAI Codex Stop hook (~/.codex/config.toml)");
+      }
+    } catch(e){}
+  ' 2>/dev/null || true
+
+  # 3. Google Antigravity
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const p = path.join(process.env.HOME, ".gemini", "config", "hooks.json");
+    if (fs.existsSync(p)) {
+      try {
+        let h = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (h["task-finished-alarm"]) {
+          delete h["task-finished-alarm"];
+          fs.writeFileSync(p, JSON.stringify(h, null, 2) + "\n");
+          console.log("  ✓ Removed Google Antigravity hook (~/.gemini/config/hooks.json)");
+        }
+      } catch(e){}
+    }
+    const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
+    for (const f of flavors) {
+      const fHook = path.join(process.env.HOME, ".gemini", f, "hooks.json");
+      try {
+        if (fs.existsSync(fHook) && fs.lstatSync(fHook).isSymbolicLink()) {
+          fs.unlinkSync(fHook);
+        }
+      } catch(e){}
+    }
+  ' 2>/dev/null || true
+
+  # 4. OpenCode
+  local opencode_file="$HOME/.config/opencode/plugins/task-finished-alarm.ts"
+  if [ -f "$opencode_file" ]; then
+    rm -f "$opencode_file"
+    echo "  ✓ Removed OpenCode plugin hook ($opencode_file)"
+  fi
+
+  # 5. Workspace
+  if [ -f ".agents/hooks.json" ]; then
+    node -e '
+      const fs = require("fs");
+      const p = ".agents/hooks.json";
+      try {
+        let h = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (h["task-finished-alarm"]) {
+          delete h["task-finished-alarm"];
+          fs.writeFileSync(p, JSON.stringify(h, null, 2) + "\n");
+          console.log("  ✓ Removed workspace hook (.agents/hooks.json)");
+        }
+      } catch(e){}
+    ' 2>/dev/null || true
+  fi
+
+  echo ""
+  echo "→ Removing global binaries..."
+  for b in "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.local/bin"; do
+    if [ -f "$b/alarm" ] || [ -L "$b/alarm" ]; then
+      rm -f "$b/alarm"
+      echo "  ✓ Removed $b/alarm"
+    fi
+    if [ -f "$b/notify" ] || [ -L "$b/notify" ]; then
+      rm -f "$b/notify"
+      echo "  ✓ Removed $b/notify"
+    fi
+  done
+
+  # 6. Prompt to remove data directory (~/.ai-alarm)
+  local remove_data=false
+  if [ "$auto_yes" = true ]; then
+    remove_data=true
+  elif [ -t 0 -o -r "/dev/tty" ]; then
+    local TTY_DEV="/dev/tty"
+    [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
+    printf "\nDo you also want to delete the sound library & config in ~/.ai-alarm? [y/N]: "
+    read -r del_data < "$TTY_DEV" || del_data="n"
+    if [[ "$del_data" =~ ^[yY](es)?$ ]]; then
+      remove_data=true
+    fi
+  fi
+
+  if [ "$remove_data" = true ]; then
+    rm -rf "$INSTALL_DIR"
+    echo "  ✓ Removed $INSTALL_DIR directory."
+  else
+    echo "  ℹ Kept sound library and configurations at $INSTALL_DIR"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 🎉 AI-Alarm has been successfully uninstalled!"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+}
+
 case "${1:-}" in
   --help|-help|-h|--ask|-ask|help)
     show_help
+    ;;
+  --status|status|info|--info)
+    show_status_dashboard
+    exit 0
+    ;;
+  --uninstall|uninstall)
+    run_uninstall "${2:-}"
+    exit 0
     ;;
 esac
 
@@ -334,17 +630,26 @@ play_preview() {
 
   stop_preview
   CURRENT_PLAYING_FILE="$audio_file"
+
+  local VOL=80
+  if [ -f "$INSTALL_DIR/config.json" ]; then
+    VOL=$(node -e 'try{const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(String(c.volume!==undefined?c.volume:80));}catch(e){console.log("80");}' "$INSTALL_DIR/config.json" 2>/dev/null || echo 80)
+  fi
+  local RATIO
+  RATIO=$(awk -v v="$VOL" 'BEGIN { printf "%.2f", v / 100 }')
+
   if command -v afplay >/dev/null 2>&1; then
-    (afplay "$audio_file") &
+    (afplay -v "$RATIO" "$audio_file") &
     PREVIEW_PID=$!
   elif command -v paplay >/dev/null 2>&1; then
-    (paplay "$audio_file") &
+    local PAPLAY_VOL=$(( VOL * 65536 / 100 ))
+    (paplay --volume="$PAPLAY_VOL" "$audio_file") &
     PREVIEW_PID=$!
   elif command -v mpv >/dev/null 2>&1; then
-    (mpv --no-video "$audio_file" >/dev/null 2>&1) &
+    (mpv --no-video --volume="$VOL" "$audio_file" >/dev/null 2>&1) &
     PREVIEW_PID=$!
   elif command -v ffplay >/dev/null 2>&1; then
-    (ffplay -nodisp -autoexit "$audio_file" >/dev/null 2>&1) &
+    (ffplay -nodisp -autoexit -volume "$VOL" "$audio_file" >/dev/null 2>&1) &
     PREVIEW_PID=$!
   elif command -v aplay >/dev/null 2>&1; then
     (aplay "$audio_file") &

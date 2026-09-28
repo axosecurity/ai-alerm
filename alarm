@@ -3,6 +3,65 @@ set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${HOME}/.ai-alarm"
+CONFIG_FILE="$INSTALL_DIR/config.json"
+
+get_config_val() {
+  local key="$1"
+  local default="$2"
+  if [ -f "$CONFIG_FILE" ]; then
+    node -e '
+      const fs = require("fs");
+      try {
+        const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const v = c[process.argv[2]];
+        if (v !== undefined) { console.log(String(v)); process.exit(0); }
+      } catch(e){}
+      console.log(String(process.argv[3]));
+    ' "$CONFIG_FILE" "$key" "$default" 2>/dev/null || echo "$default"
+  else
+    echo "$default"
+  fi
+}
+
+set_config_val() {
+  local key="$1"
+  local val="$2"
+  mkdir -p "$INSTALL_DIR"
+  node -e '
+    const fs = require("fs");
+    const p = process.argv[1];
+    const key = process.argv[2];
+    let val = process.argv[3];
+    if (val === "true") val = true;
+    else if (val === "false") val = false;
+    else if (!isNaN(val) && val.trim() !== "") val = Number(val);
+
+    let c = { volume: 80, muted: false, desktop_notifications: true };
+    if (fs.existsSync(p)) {
+      try { c = Object.assign(c, JSON.parse(fs.readFileSync(p, "utf8"))); } catch(e){}
+    }
+    c[key] = val;
+    fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+  ' "$CONFIG_FILE" "$key" "$val" 2>/dev/null || true
+}
+
+send_desktop_notification() {
+  local agent_name="${1:-}"
+  local agent_title="AI Agent"
+  case "$agent_name" in
+    claude) agent_title="Claude Code" ;;
+    codex) agent_title="OpenAI Codex" ;;
+    antigravity) agent_title="Google Antigravity" ;;
+    opencode) agent_title="OpenCode" ;;
+    *) [ -n "$agent_name" ] && agent_title="$agent_name" ;;
+  esac
+
+  if [[ "$OSTYPE" == "darwin"* ]] && command -v osascript >/dev/null 2>&1; then
+    (osascript -e "display notification \"Task completed by ${agent_title}!\" with title \"AI-Alarm\" subtitle \"Task Finished\" sound name \"\"" >/dev/null 2>&1 &)
+  elif command -v notify-send >/dev/null 2>&1; then
+    (notify-send "AI-Alarm" "Task completed by ${agent_title}!" --icon=dialog-information >/dev/null 2>&1 &)
+  fi
+}
 
 # Resolve Global Sound Library Directory
 SOUND_DIR=""
@@ -28,6 +87,11 @@ COMMANDS & OPTIONS:
     alarm                     Play current alarm sound (auto-detects agent)
     alarm <agent>             Play custom sound assigned to specific agent
                               Supported: claude, codex, antigravity, opencode
+    alarm status              Show configuration dashboard & agent hook health
+    alarm volume [0-100]      View or adjust alert playback volume (0-100%)
+    alarm mute                Silence audio alerts (desktop notifications still fire)
+    alarm unmute              Restore audio alerts
+    alarm notify [on|off]     Toggle native desktop notification banners
     alarm --select [agent]    Interactive arrow-key sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
     alarm update              Download latest community sounds from GitHub (sync)
@@ -36,6 +100,7 @@ COMMANDS & OPTIONS:
     alarm add <path|url>      Import a custom sound file or download from URL
     alarm open                Open the sound library directory in Finder / File Manager
     alarm remove <name>       Remove a sound file from the library (rm)
+    alarm uninstall           Cleanly remove all hooks, binaries, and data
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
 
 INTERACTIVE SELECTOR FEATURES:
@@ -93,6 +158,87 @@ case "${1:-}" in
     show_help
     ;;
 esac
+
+# Status dashboard
+if [ "${1:-}" = "status" ] || [ "${1:-}" = "info" ] || [ "${1:-}" = "--status" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --status
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --status
+  fi
+fi
+
+# Volume control
+if [ "${1:-}" = "volume" ] || [ "${1:-}" = "vol" ] || [ "${1:-}" = "--volume" ]; then
+  if [ -n "${2:-}" ]; then
+    if ! [[ "$2" =~ ^[0-9]+$ ]] || [ "$2" -lt 0 ] || [ "$2" -gt 100 ]; then
+      echo "Error: Volume must be an integer between 0 and 100."
+      exit 1
+    fi
+    set_config_val "volume" "$2"
+    FILLED=$(( ($2 + 5) / 10 ))
+    [ "$FILLED" -gt 10 ] && FILLED=10
+    BAR="$(printf "%*s" "$FILLED" "" | tr ' ' '█')$(printf "%*s" "$((10 - FILLED))" "" | tr ' ' '░')"
+    echo "✓ Volume set to $2% [$BAR]"
+  else
+    CUR_VOL="$(get_config_val "volume" "80")"
+    FILLED=$(( ($CUR_VOL + 5) / 10 ))
+    [ "$FILLED" -gt 10 ] && FILLED=10
+    BAR="$(printf "%*s" "$FILLED" "" | tr ' ' '█')$(printf "%*s" "$((10 - FILLED))" "" | tr ' ' '░')"
+    echo "Current volume: ${CUR_VOL}% [$BAR]"
+    echo "Change volume: alarm volume <0-100>"
+  fi
+  exit 0
+fi
+
+# Mute audio
+if [ "${1:-}" = "mute" ] || [ "${1:-}" = "--mute" ]; then
+  set_config_val "muted" "true"
+  echo "🔇 AI-Alarm muted (silent mode). Desktop notification banners will still trigger."
+  exit 0
+fi
+
+# Unmute audio
+if [ "${1:-}" = "unmute" ] || [ "${1:-}" = "--unmute" ]; then
+  set_config_val "muted" "false"
+  CUR_VOL="$(get_config_val "volume" "80")"
+  echo "🔊 AI-Alarm unmuted (volume: ${CUR_VOL}%)."
+  exit 0
+fi
+
+# Desktop notifications
+if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--notify" ]; then
+  case "${2:-}" in
+    on|true|1|enable)
+      set_config_val "desktop_notifications" "true"
+      echo "🔔 Desktop notification banners enabled."
+      ;;
+    off|false|0|disable)
+      set_config_val "desktop_notifications" "false"
+      echo "🔕 Desktop notification banners disabled."
+      ;;
+    *)
+      CUR="$(get_config_val "desktop_notifications" "true")"
+      if [ "$CUR" = "true" ]; then
+        echo "Desktop notification banners: Enabled 🔔"
+        echo "Toggle with: alarm notify off"
+      else
+        echo "Desktop notification banners: Disabled 🔕"
+        echo "Toggle with: alarm notify on"
+      fi
+      ;;
+  esac
+  exit 0
+fi
+
+# Clean uninstaller
+if [ "${1:-}" = "uninstall" ] || [ "${1:-}" = "--uninstall" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --uninstall "${2:-}"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --uninstall "${2:-}"
+  fi
+fi
 
 # Update community sounds from GitHub
 if [ "${1:-}" = "update" ] || [ "${1:-}" = "--update" ] || [ "${1:-}" = "sync" ] || [ "${1:-}" = "--sync" ]; then
@@ -308,20 +454,39 @@ fi
 
 # Play Sound using native system player
 play_audio() {
+  local MUTED="$(get_config_val "muted" "false")"
+  if [ "$MUTED" = "true" ]; then
+    return 0
+  fi
+
+  local VOL="$(get_config_val "volume" "80")"
+  if ! [[ "$VOL" =~ ^[0-9]+$ ]] || [ "$VOL" -lt 0 ] || [ "$VOL" -gt 100 ]; then
+    VOL=80
+  fi
+
   if command -v afplay >/dev/null 2>&1; then
-    afplay "$SOUND"
+    local RATIO
+    RATIO=$(awk -v v="$VOL" 'BEGIN { printf "%.2f", v / 100 }')
+    afplay -v "$RATIO" "$SOUND"
   elif command -v paplay >/dev/null 2>&1; then
-    paplay "$SOUND"
+    local PAPLAY_VOL=$(( VOL * 65536 / 100 ))
+    paplay --volume="$PAPLAY_VOL" "$SOUND"
   elif command -v mpv >/dev/null 2>&1; then
-    mpv --no-video "$SOUND" >/dev/null 2>&1
+    mpv --no-video --volume="$VOL" "$SOUND" >/dev/null 2>&1
   elif command -v ffplay >/dev/null 2>&1; then
-    ffplay -nodisp -autoexit "$SOUND" >/dev/null 2>&1
+    ffplay -nodisp -autoexit -volume "$VOL" "$SOUND" >/dev/null 2>&1
   elif command -v aplay >/dev/null 2>&1; then
     aplay "$SOUND"
   else
     echo -e "\a"
   fi
 }
+
+# Trigger Desktop Notification Banner if enabled
+DESKTOP_NOTIFY="$(get_config_val "desktop_notifications" "true")"
+if [ "$DESKTOP_NOTIFY" != "false" ]; then
+  send_desktop_notification "$AGENT"
+fi
 
 # If called by an agent hook or non-interactively, play in background so agent is not blocked
 if [ -n "$AGENT" ] || [ ! -t 0 ]; then
