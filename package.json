@@ -1,0 +1,30 @@
+{
+  "name": "ai-alerm",
+  "version": "1.0.0",
+  "description": "Cross-agent task-completion audio alarm and notification hooks for Claude Code, Codex, Antigravity, and OpenCode",
+  "main": "alarm",
+  "bin": {
+    "ai-alerm": "./bin/cli.js",
+    "ai-alarm": "./bin/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axosecurity/ai-alerm.git"
+  },
+  "scripts": {
+    "install-hooks": "./install.sh",
+    "select-sound": "./alarm --select"
+  },
+  "keywords": [
+    "ai",
+    "alarm",
+    "codex",
+    "claude-code",
+    "antigravity",
+    "opencode",
+    "hooks",
+    "productivity"
+  ],
+  "author": "axosecurity",
+  "license": "MIT"
+}

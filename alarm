@@ -1,3 +1,62 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
-afplay "$(dirname "$0")/alarm_sound.mp3"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Switch or select audio interactively
+if [ "${1:-}" = "--select" ] || [ "${1:-}" = "-s" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --select-only
+  elif [ -x "$HOME/.ai-alarm/install.sh" ]; then
+    exec "$HOME/.ai-alarm/install.sh" --select-only
+  else
+    echo "Installer script not found to select sound." >&2
+    exit 1
+  fi
+fi
+
+# List available sounds
+if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then
+  SOUND_DIR=""
+  if [ -d "$DIR/sound" ]; then
+    SOUND_DIR="$DIR/sound"
+  elif [ -d "$HOME/.ai-alarm/sound" ]; then
+    SOUND_DIR="$HOME/.ai-alarm/sound"
+  fi
+  if [ -n "$SOUND_DIR" ]; then
+    echo "Available sounds in $SOUND_DIR:"
+    for f in "$SOUND_DIR"/*.mp3; do
+      [ -f "$f" ] && echo "  - $(basename "$f")"
+    done
+    exit 0
+  fi
+fi
+
+# Locate alarm sound
+SOUND=""
+if [ -f "$DIR/alarm_sound.mp3" ]; then
+  SOUND="$DIR/alarm_sound.mp3"
+elif [ -f "$HOME/.ai-alarm/alarm_sound.mp3" ]; then
+  SOUND="$HOME/.ai-alarm/alarm_sound.mp3"
+fi
+
+if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
+  echo "Error: alarm_sound.mp3 not found." >&2
+  exit 1
+fi
+
+# Play sound using available system player
+if command -v afplay >/dev/null 2>&1; then
+  afplay "$SOUND"
+elif command -v paplay >/dev/null 2>&1; then
+  paplay "$SOUND"
+elif command -v mpv >/dev/null 2>&1; then
+  mpv --no-video "$SOUND" >/dev/null 2>&1
+elif command -v ffplay >/dev/null 2>&1; then
+  ffplay -nodisp -autoexit "$SOUND" >/dev/null 2>&1
+elif command -v aplay >/dev/null 2>&1; then
+  aplay "$SOUND"
+else
+  # Terminal bell fallback
+  echo -e "\a"
+fi
