@@ -1,51 +1,201 @@
 #!/usr/bin/env bash
-set -e
+set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${HOME}/.ai-alarm"
 
-# Switch or select audio interactively
+# Resolve Global Sound Library Directory
+SOUND_DIR=""
+if [ -n "${AI_ALARM_SOUND_DIR:-}" ] && [ -d "$AI_ALARM_SOUND_DIR" ]; then
+  SOUND_DIR="$AI_ALARM_SOUND_DIR"
+elif [ -d "$INSTALL_DIR/sound" ]; then
+  SOUND_DIR="$INSTALL_DIR/sound"
+elif [ -d "$DIR/sound" ]; then
+  SOUND_DIR="$DIR/sound"
+fi
+
+show_help() {
+  cat << 'EOF'
+╔═══════════════════════════════════════════════════════════════════╗
+║                      AI-ALARM MANUAL & HELP                       ║
+║  Cross-Agent Task Completion Audio Hooks & Alert Notification     ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+USAGE:
+    alarm [COMMAND | AGENT | OPTIONS]
+
+COMMANDS & OPTIONS:
+    alarm                     Play current alarm sound (auto-detects agent)
+    alarm <agent>             Play custom sound assigned to specific agent
+                              Supported: claude, codex, antigravity, opencode
+    alarm --select [agent]    Interactive arrow-key sound selector (-s)
+    alarm --list              List all audio files in the global sound library (-l)
+    alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
+
+INTERACTIVE SELECTOR:
+    Run: alarm --select
+    You will be prompted to choose:
+      1. Target (Global Default, Claude Code, Codex, Antigravity, or OpenCode)
+      2. Sound track using [↑] / [↓] arrow keys
+         - Press [Space] to listen to a live preview
+         - Press [Enter] to confirm selection
+         - Press [q] to cancel
+
+    Shortcuts:
+      alarm --select claude         Quickly configure Claude Code's sound
+      alarm --select codex          Quickly configure OpenAI Codex's sound
+      alarm --select antigravity    Quickly configure Google Antigravity's sound
+      alarm --select opencode       Quickly configure OpenCode's sound
+      alarm --select global         Quickly configure Global Default sound
+
+GLOBAL SOUND LOCATION:
+    All audio tracks are loaded from:
+        ~/.ai-alarm/sound/
+
+    Want to add your own sound?
+    Simply copy any .mp3 file into ~/.ai-alarm/sound/ and it will instantly
+    appear in the 'alarm --select' interactive menu!
+        cp my-alert.mp3 ~/.ai-alarm/sound/
+
+SUPPORTED AI AGENTS & HOOKS:
+    🟣 Claude Code       ~/.claude/settings.json       (hooks.Stop)
+    🟢 OpenAI Codex      ~/.codex/config.toml          ([[hooks.Stop]])
+    🔵 Antigravity       ~/.gemini/config/hooks.json   (task-finished-alarm.Stop)
+    🟡 OpenCode          ~/.config/opencode/plugins/   (session.idle)
+
+EXAMPLES:
+    alarm                     # Triggers alarm (used by hooks)
+    alarm claude              # Play Claude's sound
+    alarm --select            # Change sound interactively
+    alarm --select codex      # Change Codex's sound directly
+    alarm --list              # Show all available tracks
+    alarm --help              # Show this manual
+EOF
+  exit 0
+}
+
+# Check for help flags
+case "${1:-}" in
+  --help|-help|-h|--ask|-ask|help)
+    show_help
+    ;;
+esac
+
+# Interactive selector flag
 if [ "${1:-}" = "--select" ] || [ "${1:-}" = "-s" ]; then
+  AGENT_ARG="${2:-}"
   if [ -x "$DIR/install.sh" ]; then
-    exec "$DIR/install.sh" --select-only
-  elif [ -x "$HOME/.ai-alarm/install.sh" ]; then
-    exec "$HOME/.ai-alarm/install.sh" --select-only
+    exec "$DIR/install.sh" --select-only "$AGENT_ARG"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --select-only "$AGENT_ARG"
   else
-    echo "Installer script not found to select sound." >&2
+    echo "Error: install.sh not found to run audio selector." >&2
     exit 1
   fi
 fi
 
 # List available sounds
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then
-  SOUND_DIR=""
-  if [ -d "$DIR/sound" ]; then
-    SOUND_DIR="$DIR/sound"
-  elif [ -d "$HOME/.ai-alarm/sound" ]; then
-    SOUND_DIR="$HOME/.ai-alarm/sound"
+  if [ -z "$SOUND_DIR" ] || [ ! -d "$SOUND_DIR" ]; then
+    echo "⚠ Sound directory not found. Expected at: $INSTALL_DIR/sound"
+    exit 1
   fi
-  if [ -n "$SOUND_DIR" ]; then
-    echo "Available sounds in $SOUND_DIR:"
-    for f in "$SOUND_DIR"/*.mp3; do
-      [ -f "$f" ] && echo "  - $(basename "$f")"
-    done
-    exit 0
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 📁 Global Sound Library: $SOUND_DIR"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  for f in "$SOUND_DIR"/*.mp3; do
+    if [ -f "$f" ]; then
+      base="$(basename "$f" .mp3)"
+      echo "  ♪ $base ($(basename "$f"))"
+    fi
+  done
+  echo ""
+  echo "💡 Tip: Copy any .mp3 file here to use it with 'alarm --select'"
+  exit 0
+fi
+
+# =================================================================
+# Sound Playback & Agent Detection
+# =================================================================
+
+# 1. Determine Agent (Explicit parameter or Auto-Detection)
+AGENT=""
+case "${1:-}" in
+  claude|codex|antigravity|opencode)
+    AGENT="$1"
+    ;;
+  --agent)
+    AGENT="${2:-}"
+    ;;
+esac
+
+# Auto-detect caller if not explicitly passed
+if [ -z "$AGENT" ]; then
+  # Check environment variables
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ] || [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    AGENT="claude"
+  elif [ -n "${CODEX_SESSION_ID:-}" ] || [ -n "${CODEX_PROJECT_ROOT:-}" ]; then
+    AGENT="codex"
+  else
+    # Inspect parent process tree
+    PARENT_COMM="$(ps -o comm= -p "$PPID" 2>/dev/null || true)"
+    GRANDPARENT_PID="$(ps -o ppid= -p "$PPID" 2>/dev/null || true | tr -d ' ')"
+    GRANDPARENT_COMM=""
+    if [ -n "$GRANDPARENT_PID" ]; then
+      GRANDPARENT_COMM="$(ps -o comm= -p "$GRANDPARENT_PID" 2>/dev/null || true)"
+    fi
+    CALLER_CHAIN="$PARENT_COMM $GRANDPARENT_COMM"
+
+    if [[ "$CALLER_CHAIN" =~ claude ]]; then
+      AGENT="claude"
+    elif [[ "$CALLER_CHAIN" =~ codex ]]; then
+      AGENT="codex"
+    elif [[ "$CALLER_CHAIN" =~ (antigravity|agy) ]]; then
+      AGENT="antigravity"
+    elif [[ "$CALLER_CHAIN" =~ opencode ]]; then
+      AGENT="opencode"
+    fi
   fi
 fi
 
-# Locate alarm sound
+# 2. Locate Sound File (Agent-Specific -> Global Default Fallback)
 SOUND=""
-if [ -f "$DIR/alarm_sound.mp3" ]; then
-  SOUND="$DIR/alarm_sound.mp3"
-elif [ -f "$HOME/.ai-alarm/alarm_sound.mp3" ]; then
-  SOUND="$HOME/.ai-alarm/alarm_sound.mp3"
+
+# Try agent specific sound first
+if [ -n "$AGENT" ]; then
+  if [ -f "$INSTALL_DIR/alarm_sound_${AGENT}.mp3" ]; then
+    SOUND="$INSTALL_DIR/alarm_sound_${AGENT}.mp3"
+  elif [ -f "$DIR/alarm_sound_${AGENT}.mp3" ]; then
+    SOUND="$DIR/alarm_sound_${AGENT}.mp3"
+  fi
+fi
+
+# Fallback to default alarm sound
+if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
+  if [ -f "$INSTALL_DIR/alarm_sound.mp3" ]; then
+    SOUND="$INSTALL_DIR/alarm_sound.mp3"
+  elif [ -f "$DIR/alarm_sound.mp3" ]; then
+    SOUND="$DIR/alarm_sound.mp3"
+  fi
+fi
+
+# Final fallback: pick first mp3 in sound library
+if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
+  if [ -n "$SOUND_DIR" ] && [ -d "$SOUND_DIR" ]; then
+    FIRST_MP3=( "$SOUND_DIR"/*.mp3 )
+    if [ -f "${FIRST_MP3[0]}" ]; then
+      SOUND="${FIRST_MP3[0]}"
+    fi
+  fi
 fi
 
 if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
-  echo "Error: alarm_sound.mp3 not found." >&2
+  echo "Error: No alarm sound found in $INSTALL_DIR or $DIR" >&2
+  echo "Run 'alarm --help' or 'alarm --select' to configure." >&2
   exit 1
 fi
 
-# Play sound using available system player
+# 3. Play Sound using native system player
 if command -v afplay >/dev/null 2>&1; then
   afplay "$SOUND"
 elif command -v paplay >/dev/null 2>&1; then
@@ -57,6 +207,5 @@ elif command -v ffplay >/dev/null 2>&1; then
 elif command -v aplay >/dev/null 2>&1; then
   aplay "$SOUND"
 else
-  # Terminal bell fallback
   echo -e "\a"
 fi

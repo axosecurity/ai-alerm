@@ -2,7 +2,7 @@
 
 Cross-agent task-completion audio alarms and notification hooks for AI coding agents.
 
-Plays your chosen zikir or alarm sound automatically whenever an AI coding task finishes or goes idle.
+Plays your chosen zikir or alarm sound automatically whenever an AI coding task finishes or goes idle. Supports distinct custom sounds for each coding agent or a shared global sound.
 
 ---
 
@@ -23,22 +23,71 @@ cd ai-alerm && ./install.sh
 
 ---
 
+## 📖 Help & Manual (`-help` or `-ask`)
+
+You can view the full interactive manual and command reference at any time:
+
+```bash
+alarm -help
+# or
+alarm -ask
+# or
+alarm --help
+```
+
+---
+
+## 📁 Global Sound Library (`~/.ai-alarm/sound/`)
+
+Following the design pattern of modern Unix CLI tools (like Starship, Oh-My-Zsh, Neovim), `ai-alerm` stores all audio tracks in a persistent global user directory:
+
+```text
+~/.ai-alarm/sound/
+├── allahuakabar-laillahillah-zikir.mp3
+├── istighfar.mp3
+├── istighfar-shoddurud-zikir.mp3
+└── shoddurud-sharif.mp3
+```
+
+### Adding Custom Sounds:
+Want to use your own nasheed, zikir, chime, or alert?
+Simply copy any `.mp3` into your global sound directory:
+
+```bash
+cp /path/to/my-sound.mp3 ~/.ai-alarm/sound/
+```
+
+It will **instantly appear** in the interactive selector without touching any configuration or code!
+
+---
+
 ## 🎧 Interactive Audio Selector
 
-During setup, you do not need to type anything. An interactive terminal menu lets you choose your alert:
+Choose or change your alert sound at any time without typing:
 
-* **`[↑]` / `[↓]` (or `k` / `j`)**: Navigate between sounds
-* **`[Space]`**: Test-play a live preview
-* **`[Enter]`**: Confirm and apply selection
-* **`[q]`**: Quit
+```bash
+alarm --select
+```
+
+### Two-Step Selection:
+1. **Choose Target Agent:**
+   - 🌐 Global Default (All Agents)
+   - 🟣 Claude Code
+   - 🟢 OpenAI Codex
+   - 🔵 Google Antigravity
+   - 🟡 OpenCode
+
+2. **Pick Sound with Arrow Keys:**
+   - **`[↑]` / `[↓]` (or `k` / `j`)**: Navigate tracks
+   - **`[Space]`**: Test-play a live preview
+   - **`[Enter]`**: Select and activate
+   - **`[q]`**: Cancel
 
 ```text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔔 Select Alarm / Zikir Sound for Task Completion
+ 🔔 Select Sound Track for: Claude Code
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Controls:
-   [↑ / ↓] Navigate      [Space] Preview sound
-   [Enter] Confirm       [q] Quit
+ Controls: [↑ / ↓] Navigate   [Space] Preview   [Enter] Select   [q] Cancel
 
    [ ] allahuakabar-laillahillah-zikir
  ❯ [●] istighfar-shoddurud-zikir
@@ -46,57 +95,50 @@ During setup, you do not need to type anything. An interactive terminal menu let
    [ ] shoddurud-sharif
 ```
 
-### Switch sound anytime:
+### Direct Shortcuts:
 ```bash
-alarm --select
+alarm --select claude         # Set sound specifically for Claude Code
+alarm --select codex          # Set sound specifically for OpenAI Codex
+alarm --select antigravity    # Set sound specifically for Google Antigravity
+alarm --select opencode       # Set sound specifically for OpenCode
+alarm --select global         # Set the global default fallback sound
 ```
 
 ---
 
-## 🤖 Supported AI Coding Agents & Native Hooks
+## 🤖 Multi-Agent Native Hooks
 
 The installer auto-detects installed coding agents and registers native completion hooks:
 
-| Agent | Hook Configuration | Trigger Event |
-|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | `hooks.Stop` |
-| **OpenAI Codex** | `~/.codex/config.toml` | `[[hooks.Stop]]` |
-| **Google Antigravity** | `~/.gemini/config/hooks.json` | `task-finished-alarm.Stop` |
-| **OpenCode** | `~/.config/opencode/plugins/task-finished-alarm.ts` | `session.idle` |
+| Agent | Config File | Trigger Event | Hook Command |
+|---|---|---|---|
+| **Claude Code** | `~/.claude/settings.json` | `hooks.Stop` | `alarm claude` |
+| **OpenAI Codex** | `~/.codex/config.toml` | `[[hooks.Stop]]` | `alarm codex` |
+| **Google Antigravity** | `~/.gemini/config/hooks.json` | `task-finished-alarm.Stop` | `alarm antigravity` |
+| **OpenCode** | `~/.config/opencode/plugins/task-finished-alarm.ts` | `session.idle` | `alarm opencode` |
 
-Whenever any agent finishes its turn, `alarm` is executed automatically.
-
----
-
-## 📁 Repository Structure
-
-All sound tracks are kept flat directly in the `sound/` directory:
-
+### How Sound Resolution Works:
 ```text
-ai-alerm/
-├── bin/
-│   └── cli.js                         # NPX CLI runner
-├── sound/                             # Audio tracks directory
-│   ├── allahuakabar-laillahillah-zikir.mp3
-│   ├── istighfar.mp3
-│   ├── istighfar-shoddurud-zikir.mp3
-│   └── shoddurud-sharif.mp3
-├── alarm                              # Alarm player script (cross-platform)
-├── notify                             # Slack notification script
-├── alarm_sound.mp3                    # Symlink pointing to active sound
-├── install.sh                         # Master interactive installer & hook setup
-├── package.json                       # NPX package descriptor
-└── README.md
+Agent finishes task (e.g. Claude Code)
+         │
+         ▼
+Does custom sound exist? (~/.ai-alarm/alarm_sound_claude.mp3)
+  ├── YES ──▶ Plays Claude's custom sound
+  └── NO  ──▶ Falls back to Global Default (~/.ai-alarm/alarm_sound.mp3)
 ```
 
 ---
 
-## 🛠 Commands
+## 🛠 Commands Reference
 
-* **`alarm`**: Plays the active alarm track.
-* **`alarm --select`**: Launches the interactive audio picker.
-* **`alarm --list`**: Lists available sound tracks.
+* **`alarm`**: Plays current alarm sound (auto-detects calling agent).
+* **`alarm <agent>`**: Plays custom sound for a specific agent (`claude`, `codex`, `antigravity`, `opencode`).
+* **`alarm --select`** / **`-s`**: Launches the interactive audio selector.
+* **`alarm --list`** / **`-l`**: Lists all available sound files in the global sound library.
+* **`alarm -help`** / **`-ask`** / **`--help`**: Opens the comprehensive CLI manual.
 * **`notify`**: Sends task-completion notifications to your configured Slack webhook.
+
+---
 
 ## 💻 Requirements
 
