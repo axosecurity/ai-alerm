@@ -88,6 +88,9 @@ COMMANDS & OPTIONS:
     alarm <agent>             Play custom sound assigned to specific agent
                               Supported: claude, codex, antigravity, opencode
     alarm status              Show configuration dashboard & agent hook health
+    alarm storage             Show disk usage and local vs cloud sound breakdown (cache)
+    alarm prune               Delete all unused sounds to free disk space (clean)
+    alarm restore             Download all community sounds for offline use (download-all)
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
     alarm unmute              Restore audio alerts
@@ -99,17 +102,18 @@ COMMANDS & OPTIONS:
     alarm --list              List all audio files in the global sound library (-l)
     alarm add <path|url>      Import a custom sound file or download from URL
     alarm open                Open the sound library directory in Finder / File Manager
-    alarm remove <name>       Remove a sound file from the library (rm)
+    alarm remove <name>       Remove a sound file from local disk (rm, delete)
     alarm uninstall           Cleanly remove all hooks, binaries, and data
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
 
 INTERACTIVE SELECTOR FEATURES:
     Run: alarm --select
     * [↑] / [↓] : Navigate between sounds
-    * [Space]   : Toggle live audio preview (shows ▶ Playing...)
+    * [Space]   : Toggle live audio preview (downloads on demand if cloud)
+    * [d]       : Delete local audio file from disk to save space
     * [/]       : Filter / Search sounds on the fly
     * [c]       : Cycle through categories ([All], [zikir], [durood], [istighfar])
-    * [Enter]   : Confirm selection
+    * [Enter]   : Confirm selection (downloads on demand if cloud)
     * [q]       : Cancel
 
     Shortcuts:
@@ -127,10 +131,13 @@ DYNAMIC SOUND MANAGEMENT:
         .mp3, .wav, .m4a, .aac, .ogg, .flac, .aiff
 
     Ways to manage sounds:
-      1. Run: alarm update              (syncs latest community sounds from GitHub)
-      2. Run: alarm search <keyword>    (searches titles, descriptions, and tags)
-      3. Run: alarm add /path/to/sound  (imports custom sound)
-      4. Run: alarm open                (opens Finder to drag & drop files!)
+      1. Run: alarm update              (syncs latest community catalog from GitHub)
+      2. Run: alarm storage             (view disk usage and storage breakdown)
+      3. Run: alarm prune               (delete all unused sounds, keep active alerts)
+      4. Run: alarm restore             (download all community sounds for offline use)
+      5. Run: alarm search <keyword>    (searches titles, descriptions, and tags)
+      6. Run: alarm add /path/to/sound  (imports custom sound)
+      7. Run: alarm open                (opens Finder to drag & drop files!)
 
 SUPPORTED AI AGENTS & HOOKS:
     🟣 Claude Code       ~/.claude/settings.json       (hooks.Stop)
@@ -240,6 +247,33 @@ if [ "${1:-}" = "uninstall" ] || [ "${1:-}" = "--uninstall" ]; then
   fi
 fi
 
+# Prune / Clean unused sounds (free disk space, protect active agent sounds)
+if [ "${1:-}" = "prune" ] || [ "${1:-}" = "--prune" ] || [ "${1:-}" = "clean" ] || [ "${1:-}" = "--clean" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --prune
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --prune
+  fi
+fi
+
+# Storage & Cache Info
+if [ "${1:-}" = "storage" ] || [ "${1:-}" = "--storage" ] || [ "${1:-}" = "cache" ] || [ "${1:-}" = "--cache" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --storage
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --storage
+  fi
+fi
+
+# Restore / Download all community sounds
+if [ "${1:-}" = "restore" ] || [ "${1:-}" = "--restore" ] || [ "${1:-}" = "download-all" ] || [ "${1:-}" = "--download-all" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --restore
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --restore
+  fi
+fi
+
 # Update community sounds from GitHub
 if [ "${1:-}" = "update" ] || [ "${1:-}" = "--update" ] || [ "${1:-}" = "sync" ] || [ "${1:-}" = "--sync" ]; then
   if [ -x "$DIR/install.sh" ]; then
@@ -311,8 +345,8 @@ if [ "${1:-}" = "add" ] || [ "${1:-}" = "--add" ]; then
   fi
 fi
 
-# Remove sound
-if [ "${1:-}" = "remove" ] || [ "${1:-}" = "rm" ] || [ "${1:-}" = "--remove" ]; then
+# Remove / Delete sound
+if [ "${1:-}" = "remove" ] || [ "${1:-}" = "rm" ] || [ "${1:-}" = "--remove" ] || [ "${1:-}" = "delete" ] || [ "${1:-}" = "--delete" ]; then
   if [ -z "${2:-}" ]; then
     echo "Usage: alarm remove <sound_name>"
     exit 1

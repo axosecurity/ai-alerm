@@ -257,21 +257,18 @@ if (Test-Path $localSoundDir) {
         }
     }
 } else {
-    Write-Host "→ Downloading sounds from GitHub..." -ForegroundColor Cyan
+    Write-Host "→ Fetching sound catalog metadata from GitHub..." -ForegroundColor Cyan
     try {
         $jsonDest = Join-Path $SoundDir "sounds.json"
         Invoke-WebRequest -Uri "$RepoRawUrl/sound/sounds.json" -OutFile $jsonDest -UseBasicParsing
-        $catalog = Get-Content $jsonDest -Raw | ConvertFrom-Json
-        foreach ($prop in $catalog.PSObject.Properties) {
-            $trackName = $prop.Name
-            $trackDest = Join-Path $SoundDir $trackName
-            if (-not (Test-Path $trackDest)) {
-                Write-Host "  → Downloading $trackName..." -ForegroundColor Gray
-                Invoke-WebRequest -Uri "$RepoRawUrl/sound/$trackName" -OutFile $trackDest -UseBasicParsing
-            }
+        $defaultTrack = "allahuakabar-laillahillah-zikir.mp3"
+        $trackDest = Join-Path $SoundDir $defaultTrack
+        if (-not (Test-Path $trackDest)) {
+            Write-Host "  → Downloading starter track ($defaultTrack)..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri "$RepoRawUrl/sound/$defaultTrack" -OutFile $trackDest -UseBasicParsing
         }
     } catch {
-        Write-Warning "Could not download sounds from GitHub. Please check internet connection."
+        Write-Warning "Could not fetch sound catalog from GitHub. Please check internet connection."
     }
 }
 
@@ -377,6 +374,199 @@ if ($Command -in @("notify", "notification", "--notify")) {
         $cfg.desktop_notifications = $true
         Save-AlarmConfig $cfg
         Write-Host "🔔 Desktop notification toasts enabled." -ForegroundColor Green
+    }
+    exit 0
+}
+
+# Help command
+if ($Command -in @("help", "-help", "--help", "-h", "-ask", "--ask")) {
+    Write-Host @"
+╔═══════════════════════════════════════════════════════════════════╗
+║                      AI-ALARM MANUAL & HELP                       ║
+║  Universal Cross-Platform Task Completion Audio & Notifications   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+USAGE:
+    alarm [COMMAND | AGENT | OPTIONS]
+
+COMMANDS & OPTIONS:
+    alarm                     Play current alarm sound (auto-detects agent)
+    alarm <agent>             Play custom sound for agent (claude, codex, antigravity, opencode)
+    alarm status              Show configuration dashboard & agent hook health
+    alarm storage             Show disk usage and local vs cloud sound breakdown (cache)
+    alarm prune               Delete all unused sounds to free disk space (clean)
+    alarm restore             Download all community sounds for offline use (download-all)
+    alarm volume [0-100]      View or adjust alert playback volume (0-100%)
+    alarm mute                Silence audio alerts (desktop notifications still fire)
+    alarm unmute              Restore audio alerts
+    alarm notify [on|off]     Toggle native desktop notification banners
+    alarm update              Download latest community catalog from GitHub (sync)
+    alarm set <sound> [agent] Directly activate a sound track without menu
+    alarm open                Open the sound library directory in File Manager
+    alarm remove <name>       Remove a sound file from local disk (rm, delete)
+    alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
+"@
+    exit 0
+}
+
+# Storage & Cache breakdown
+if ($Command -in @("storage", "cache", "--storage", "--cache")) {
+    $files = Get-ChildItem -Path $SoundDir -File -Include *.mp3,*.wav,*.m4a,*.aac,*.ogg,*.flac,*.aiff -ErrorAction SilentlyContinue
+    $count = if ($files) { $files.Count } else { 0 }
+    $bytes = 0
+    if ($files) { $files | ForEach-Object { $bytes += $_.Length } }
+    $mb = [Math]::Round($bytes / 1MB, 2)
+    
+    $catPath = Join-Path $SoundDir "sounds.json"
+    $catCount = $count
+    if (Test-Path $catPath) {
+        try {
+            $cat = Get-Content $catPath -Raw | ConvertFrom-Json
+            $catCount = [Math]::Max($count, ($cat.PSObject.Properties | Measure-Object).Count)
+        } catch {}
+    }
+
+    Write-Host @"
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STORAGE & CACHE BREAKDOWN                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  Local Sounds Stored:    $count tracks ($mb MB on disk)
+  Total Catalog Sounds:   $catCount community tracks available on GitHub
+
+  💡 Free up disk space:   alarm prune
+  💡 Download all sounds:  alarm restore
+  💡 Pick sound directly:  alarm set <track>
+"@
+    exit 0
+}
+
+# Prune unused sounds (keep active assigned agent tracks, delete the rest)
+if ($Command -in @("prune", "clean", "--prune", "--clean")) {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host " 🧹 Pruning Unused Sounds (Freeing Disk Space)..." -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    
+    $activeFiles = @()
+    Get-ChildItem -Path $InstallDir -File -Filter "alarm_sound*.mp3" -ErrorAction SilentlyContinue | ForEach-Object {
+        $activeFiles += $_.Name
+    }
+    
+    $files = Get-ChildItem -Path $SoundDir -File -Include *.mp3,*.wav,*.m4a,*.aac,*.ogg,*.flac,*.aiff -ErrorAction SilentlyContinue
+    $deleted = 0
+    $freedBytes = 0
+    foreach ($f in $files) {
+        if ($f.Name -in $activeFiles) {
+            Write-Host "  🛡️  Protected (Active): $($f.Name)" -ForegroundColor Green
+            continue
+        }
+        $freedBytes += $f.Length
+        Remove-Item -Path $f.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host "  🗑️  Removed: $($f.Name)" -ForegroundColor Yellow
+        $deleted++
+    }
+    $freedMb = [Math]::Round($freedBytes / 1MB, 2)
+    Write-Host ""
+    Write-Host "✓ Pruned $deleted unused sound file(s). Freed $freedMb MB!" -ForegroundColor Green
+    Write-Host "💡 Active agent alerts are safe. You can re-download any sound anytime via GitHub."
+    exit 0
+}
+
+# Restore / Download all sounds
+if ($Command -in @("restore", "download-all", "--restore", "--download-all")) {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host " ⬇️  Downloading Full Community Sound Pack..." -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    $catPath = Join-Path $SoundDir "sounds.json"
+    if (-not (Test-Path $catPath)) {
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/sounds.json" -OutFile $catPath -UseBasicParsing
+    }
+    try {
+        $cat = Get-Content $catPath -Raw | ConvertFrom-Json
+        $downloaded = 0
+        foreach ($prop in $cat.PSObject.Properties) {
+            $t = $prop.Name
+            $dest = Join-Path $SoundDir $t
+            if (-not (Test-Path $dest)) {
+                Write-Host "  → Downloading $t..." -ForegroundColor Gray
+                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/$t" -OutFile $dest -UseBasicParsing
+                $downloaded++
+            }
+        }
+        Write-Host ""
+        Write-Host "🎉 Restore complete! Downloaded $downloaded track(s). All community sounds cached locally." -ForegroundColor Green
+    } catch {
+        Write-Warning "Failed to download sounds from GitHub."
+    }
+    exit 0
+}
+
+# Remove single sound
+if ($Command -in @("remove", "rm", "delete", "--remove", "--delete")) {
+    if (-not $Arg1) {
+        Write-Host "Usage: alarm remove <sound_name>"
+        exit 1
+    }
+    $found = $false
+    Get-ChildItem -Path $SoundDir -File | ForEach-Object {
+        if ($_.Name -eq $Arg1 -or $_.BaseName -eq $Arg1) {
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+            Write-Host "✓ Removed sound from local storage: $($_.Name)" -ForegroundColor Green
+            $found = $true
+        }
+    }
+    if (-not $found) {
+        Write-Host "⚠ Sound '$Arg1' not found in $SoundDir" -ForegroundColor Yellow
+    }
+    exit 0
+}
+
+# Set sound directly (with on-demand streaming/download from GitHub if cloud-only)
+if ($Command -in @("set", "--set")) {
+    if (-not $Arg1) {
+        Write-Host "Usage: alarm set <sound_filename> [agent]"
+        exit 1
+    }
+    $targetSound = $Arg1
+    $targetAgent = if ($Arg2) { $Arg2 } else { "global" }
+    
+    $destFile = if ($targetAgent -eq "global") { "alarm_sound.mp3" } else { "alarm_sound_$targetAgent.mp3" }
+    $destPath = Join-Path $InstallDir $destFile
+    
+    $localFile = $null
+    Get-ChildItem -Path $SoundDir -File | ForEach-Object {
+        if ($_.Name -eq $targetSound -or $_.BaseName -eq $targetSound) {
+            $localFile = $_.FullName
+        }
+    }
+    
+    if (-not $localFile) {
+        $catPath = Join-Path $SoundDir "sounds.json"
+        if (Test-Path $catPath) {
+            try {
+                $cat = Get-Content $catPath -Raw | ConvertFrom-Json
+                foreach ($prop in $cat.PSObject.Properties) {
+                    if ($prop.Name -eq $targetSound -or [System.IO.Path]::GetFileNameWithoutExtension($prop.Name) -eq $targetSound) {
+                        $trackName = $prop.Name
+                        $dest = Join-Path $SoundDir $trackName
+                        Write-Host "→ Downloading $trackName from GitHub (0 cost)..." -ForegroundColor Cyan
+                        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/$trackName" -OutFile $dest -UseBasicParsing
+                        $localFile = $dest
+                        break
+                    }
+                }
+            } catch {}
+        }
+    }
+    
+    if ($localFile) {
+        Copy-Item -Path $localFile -Destination $destPath -Force
+        Write-Host "✓ Set $targetAgent sound → $([System.IO.Path]::GetFileName($localFile))" -ForegroundColor Green
+    } else {
+        Write-Host "Error: Sound '$targetSound' not found locally or in GitHub catalog." -ForegroundColor Red
+        exit 1
     }
     exit 0
 }

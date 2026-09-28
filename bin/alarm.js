@@ -74,18 +74,21 @@ COMMANDS & OPTIONS:
     alarm                     Play current alarm sound (auto-detects agent)
     alarm <agent>             Play custom sound for agent (claude, codex, antigravity, opencode)
     alarm status              Show configuration dashboard & agent hook health
+    alarm storage             Show disk usage and local vs cloud sound breakdown (cache)
+    alarm prune               Delete all unused sounds to free disk space (clean)
+    alarm restore             Download all community sounds for offline use (download-all)
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
     alarm unmute              Restore audio alerts
     alarm notify [on|off]     Toggle native desktop notification banners
     alarm --select [agent]    Interactive sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
-    alarm update              Download latest community sounds from GitHub (sync)
+    alarm update              Download latest community catalog from GitHub (sync)
     alarm set <sound> [agent] Directly activate a sound track without menu
     alarm --list              List all audio files in the global sound library (-l)
     alarm add <path|url>      Import a custom sound file or download from URL
     alarm open                Open the sound library directory in File Manager
-    alarm remove <name>       Remove a sound file from the library (rm)
+    alarm remove <name>       Remove a sound file from local disk (rm, delete)
     alarm uninstall           Cleanly remove all hooks, binaries, and data
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
 
@@ -374,6 +377,210 @@ function showStatus() {
   process.exit(0);
 }
 
+// Download a single sound file on-demand from GitHub (0-cost CDN)
+function downloadSingleTrack(trackName, onDone) {
+  const dest = path.join(SOUND_DIR, trackName);
+  console.log(`→ Downloading ${trackName} from GitHub (0 cost)...`);
+  const fileStream = fs.createWriteStream(dest);
+  const trackUrl = `https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/${encodeURIComponent(trackName)}`;
+  https.get(trackUrl, (r) => {
+    if (r.statusCode === 200) {
+      r.pipe(fileStream);
+      fileStream.on('finish', () => {
+        fileStream.close();
+        onDone(null, dest);
+      });
+    } else {
+      fileStream.close();
+      try { fs.unlinkSync(dest); } catch (e) {}
+      onDone(new Error(`HTTP ${r.statusCode}`));
+    }
+  }).on('error', (err) => {
+    fileStream.close();
+    try { fs.unlinkSync(dest); } catch (e) {}
+    onDone(err);
+  });
+}
+
+// Storage & Cache Breakdown
+function showStorage() {
+  const cat = loadCatalog();
+  const catKeys = Object.keys(cat);
+  const extensions = /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i;
+  const onDisk = fs.existsSync(SOUND_DIR) ? fs.readdirSync(SOUND_DIR).filter(f => extensions.test(f)) : [];
+  
+  let bytes = 0;
+  for (const f of onDisk) {
+    try { bytes += fs.statSync(path.join(SOUND_DIR, f)).size; } catch(e){}
+  }
+  const mb = (bytes / (1024 * 1024)).toFixed(2);
+
+  const assigned = new Set();
+  const installFiles = fs.existsSync(INSTALL_DIR) ? fs.readdirSync(INSTALL_DIR) : [];
+  for (const f of installFiles) {
+    if (f.startsWith('alarm_sound')) {
+      const full = path.join(INSTALL_DIR, f);
+      try {
+        const target = fs.readlinkSync(full);
+        assigned.add(path.basename(target));
+      } catch(e) {
+        assigned.add(f);
+      }
+    }
+  }
+
+  const totalCatalog = Math.max(catKeys.length, onDisk.length);
+
+  console.log(`
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STORAGE & CACHE BREAKDOWN                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  Local Sounds Stored:    ${onDisk.length} tracks (${mb} MB on disk)
+  Active Agent Sounds:    ${assigned.size} tracks (protected from pruning)
+  Total Catalog Sounds:   ${totalCatalog} community tracks available on GitHub
+
+  💡 Free up disk space:   alarm prune
+  💡 Download all sounds:  alarm restore
+  💡 Pick sound on-demand: alarm --select
+`);
+  process.exit(0);
+}
+
+// Prune unused sounds (keep active assigned agent tracks, delete the rest)
+function pruneSounds() {
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(` 🧹 Pruning Unused Sounds (Freeing Disk Space)...`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+  const assigned = new Set();
+  const installFiles = fs.existsSync(INSTALL_DIR) ? fs.readdirSync(INSTALL_DIR) : [];
+  for (const f of installFiles) {
+    if (f.startsWith('alarm_sound')) {
+      const full = path.join(INSTALL_DIR, f);
+      try {
+        const target = fs.readlinkSync(full);
+        assigned.add(path.basename(target));
+      } catch(e) {
+        assigned.add(f);
+      }
+    }
+  }
+
+  const extensions = /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i;
+  const files = fs.existsSync(SOUND_DIR) ? fs.readdirSync(SOUND_DIR).filter(f => extensions.test(f)) : [];
+  let deletedCount = 0;
+  let freedBytes = 0;
+
+  for (const f of files) {
+    if (assigned.has(f)) {
+      console.log(`  🛡️  Protected (Active): ${f}`);
+      continue;
+    }
+    const full = path.join(SOUND_DIR, f);
+    try {
+      const sz = fs.statSync(full).size;
+      fs.unlinkSync(full);
+      deletedCount++;
+      freedBytes += sz;
+      console.log(`  🗑️  Removed: ${f}`);
+    } catch(e){}
+  }
+
+  const freedMB = (freedBytes / (1024 * 1024)).toFixed(2);
+  console.log(`\n✓ Pruned ${deletedCount} unused sound file(s). Freed ${freedMB} MB!`);
+  console.log(`💡 Active agent alerts are safe. You can re-download any sound anytime via GitHub.`);
+  process.exit(0);
+}
+
+// Restore / Download all community sounds
+function restoreSounds() {
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(` ⬇️  Downloading Full Community Sound Pack...`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  const cat = loadCatalog();
+  const tracks = Object.keys(cat);
+  if (tracks.length === 0) {
+    console.log('No tracks listed in catalog sounds.json. Run "alarm update" first.');
+    process.exit(0);
+  }
+
+  let toDownload = [];
+  for (const t of tracks) {
+    const dest = path.join(SOUND_DIR, t);
+    if (!fs.existsSync(dest)) {
+      toDownload.push(t);
+    }
+  }
+
+  if (toDownload.length === 0) {
+    console.log('✓ All community sounds are already downloaded and cached locally.');
+    process.exit(0);
+  }
+
+  let completed = 0;
+  function downloadNext(index) {
+    if (index >= toDownload.length) {
+      console.log(`\n🎉 Restore complete! Downloaded ${completed} track(s). All community sounds are cached locally.`);
+      process.exit(0);
+      return;
+    }
+    const track = toDownload[index];
+    process.stdout.write(`  → Downloading ${track}... `);
+    const dest = path.join(SOUND_DIR, track);
+    const fileStream = fs.createWriteStream(dest);
+    const url = `https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/${encodeURIComponent(track)}`;
+    https.get(url, (res) => {
+      if (res.statusCode === 200) {
+        res.pipe(fileStream);
+        fileStream.on('finish', () => {
+          fileStream.close();
+          completed++;
+          process.stdout.write('✓\n');
+          downloadNext(index + 1);
+        });
+      } else {
+        fileStream.close();
+        try { fs.unlinkSync(dest); } catch(e){}
+        process.stdout.write('✗ (failed)\n');
+        downloadNext(index + 1);
+      }
+    }).on('error', () => {
+      fileStream.close();
+      try { fs.unlinkSync(dest); } catch(e){}
+      process.stdout.write('✗ (network error)\n');
+      downloadNext(index + 1);
+    });
+  }
+
+  downloadNext(0);
+}
+
+// Remove sound from local library
+function removeSound(target) {
+  if (!target) {
+    console.log('Usage: alarm remove <sound_name>');
+    process.exit(1);
+  }
+  let found = false;
+  const files = fs.existsSync(SOUND_DIR) ? fs.readdirSync(SOUND_DIR) : [];
+  for (const f of files) {
+    if (f.toLowerCase() === target.toLowerCase() || path.parse(f).name.toLowerCase() === target.toLowerCase()) {
+      try {
+        fs.unlinkSync(path.join(SOUND_DIR, f));
+        console.log(`✓ Removed sound from local storage: ${f}`);
+        found = true;
+      } catch(e) {
+        console.error(`Error removing ${f}: ${e.message}`);
+      }
+    }
+  }
+  if (!found) {
+    console.log(`⚠ Sound '${target}' not found in ${SOUND_DIR}`);
+  }
+  process.exit(0);
+}
+
 // CLI Command Router
 const args = process.argv.slice(2);
 const cmd = args[0] ? args[0].toLowerCase() : '';
@@ -386,6 +593,26 @@ if (['-h', '--help', 'help', '-help', '-ask', '--ask'].includes(cmd)) {
 // 2. Status
 if (['status', 'info', '--status', '-status'].includes(cmd)) {
   showStatus();
+}
+
+// 2b. Storage & Cache
+if (['storage', 'cache', '--storage', '--cache'].includes(cmd)) {
+  showStorage();
+}
+
+// 2c. Prune / Clean Unused Sounds
+if (['prune', 'clean', '--prune', '--clean'].includes(cmd)) {
+  pruneSounds();
+}
+
+// 2d. Restore / Download All Sounds
+if (['restore', 'download-all', '--restore', '--download-all'].includes(cmd)) {
+  restoreSounds();
+}
+
+// 2e. Remove / Delete Single Sound
+if (['remove', 'rm', 'delete', '--remove', '--delete'].includes(cmd)) {
+  removeSound(args[1]);
 }
 
 // 3. Volume
@@ -551,23 +778,42 @@ if (['set', '--set'].includes(cmd)) {
     console.log('Usage: alarm set <sound_filename> [agent]');
     process.exit(1);
   }
-  const files = fs.readdirSync(SOUND_DIR);
+  const files = fs.existsSync(SOUND_DIR) ? fs.readdirSync(SOUND_DIR) : [];
   const match = files.find(f => f.toLowerCase() === targetSound.toLowerCase() || path.parse(f).name.toLowerCase() === targetSound.toLowerCase());
-  if (!match) {
-    console.error(`Error: Sound '${targetSound}' not found in ${SOUND_DIR}`);
-    process.exit(1);
-  }
-  const destName = targetAgent === 'global' ? 'alarm_sound.mp3' : `alarm_sound_${targetAgent}.mp3`;
-  const destPath = path.join(INSTALL_DIR, destName);
-  try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch (e) {}
   
-  if (isWin) {
-    fs.copyFileSync(path.join(SOUND_DIR, match), destPath);
-  } else {
-    fs.symlinkSync(path.join('sound', match), destPath);
+  function applySound(chosenFile) {
+    const destName = targetAgent === 'global' ? 'alarm_sound.mp3' : `alarm_sound_${targetAgent}.mp3`;
+    const destPath = path.join(INSTALL_DIR, destName);
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch (e) {}
+    
+    if (isWin) {
+      fs.copyFileSync(path.join(SOUND_DIR, chosenFile), destPath);
+    } else {
+      fs.symlinkSync(path.join('sound', chosenFile), destPath);
+    }
+    console.log(`✓ Set ${targetAgent === 'global' ? 'Global Default' : targetAgent} sound → ${chosenFile}`);
+    process.exit(0);
   }
-  console.log(`✓ Set ${targetAgent === 'global' ? 'Global Default' : targetAgent} sound → ${match}`);
-  process.exit(0);
+
+  if (!match) {
+    const catalog = loadCatalog();
+    const catKeys = Object.keys(catalog);
+    const cloudMatch = catKeys.find(k => k.toLowerCase() === targetSound.toLowerCase() || path.parse(k).name.toLowerCase() === targetSound.toLowerCase());
+    if (cloudMatch) {
+      downloadSingleTrack(cloudMatch, (err) => {
+        if (err) {
+          console.error(`Failed to download ${cloudMatch} from GitHub: ${err.message}`);
+          process.exit(1);
+        }
+        applySound(cloudMatch);
+      });
+      return;
+    }
+    console.error(`Error: Sound '${targetSound}' not found in local library or catalog.`);
+    process.exit(1);
+  } else {
+    applySound(match);
+  }
 }
 
 // 9. Open sound folder

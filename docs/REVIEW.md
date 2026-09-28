@@ -78,6 +78,14 @@ Every supported coding agent was subjected to automated and manual hook lifecycl
 6. **Community Sync Engine:**
    * One-click community sound updates via `alarm update` directly from GitHub.
 
+7. **Zero-Cost On-Demand Cloud Streaming & Storage Management:**
+   * **Thin Metadata Catalog:** Stores only lightweight `sounds.json` and active alerts on disk, avoiding local storage bloat even if the community catalog reaches hundreds of megabytes or gigabytes.
+   * **Zero Paid Services / Native GitHub CDN:** All audio streaming and downloads pull on-demand from GitHub native raw endpoints (`raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/...`). Zero paid CDNs or infrastructure costs.
+   * **Interactive Deletion:** Users can delete unneeded audio files directly from the TUI with `[d]` / `[Del]`, instantly transitioning them to `[☁ Cloud]`.
+   * **Smart Pruning (`alarm prune`):** Sweeps through the sound library and frees disk space by deleting unassigned tracks while strictly protecting all active agent alert symlinks.
+   * **Storage Breakdown Dashboard (`alarm storage`):** Real-time disk utilization metrics displaying cached local tracks vs total cloud catalog.
+   * **Offline Full Pack Restore (`alarm restore`):** Allows users to bulk-download the full sound catalog in one command for offline environments.
+
 ---
 
 ## 🌐 Universal OS & Distribution Architecture

@@ -97,10 +97,11 @@ alarm --select
 
 ### Controls & Features:
 * **`[↑]` / `[↓]` (or `k` / `j`)**: Navigate sound library
-* **`[Space]`**: Toggle live audio preview (`▶ Playing...`)
+* **`[Space]`**: Toggle live audio preview (`▶ Playing...` — downloads on demand if cloud-only)
+* **`[d]`**: 🗑️ Delete local sound file from disk to reclaim space (instantly switches to `[☁ Cloud]`)
 * **`[/]`**: Instant search / filter by keyword
 * **`[c]`**: Cycle category filter (`[All]`, `[zikir]`, `[durood]`, `[istighfar]`, `[adhan]`, `[chime]`)
-* **`[Enter]`**: Select and activate sound
+* **`[Enter]`**: Select and activate sound (downloads on demand if cloud-only)
 * **`[q]`**: Cancel
 
 ```text
@@ -108,14 +109,17 @@ alarm --select
  🔔 Select Alert Sound Track for: Global Default
  Filter: [zikir] (press 'c' to cycle) | Search: "forgiveness" (press '/' to filter)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Controls: [↑ / ↓] Navigate   [Space] ▶ Play/Stop Preview   [Enter] Select   [q] Cancel
+ Controls: [↑ / ↓] Navigate   [Space] ▶ Play   [Enter] Select   [d] 🗑 Delete file   [q] Cancel
 
- ❯ [●] Combined Istighfar + Durood (18.7s) — [Astaghfirullah + Durood on Prophet]  ▶ Playing...
-   [ ] Astaghfirullah Short (11.0s) — [Astaghfirullah Rabbi min kulli zambin]
-   [ ] Takbeer & Tahleel Zikir (16.4s) — [Allahu Akbar and La ilaha illallah]
+ ❯ [●] Combined Istighfar + Durood (18.7s) [✓ Local] — [Astaghfirullah + Durood on Prophet]  ▶ Playing...
+   [ ] Astaghfirullah Short (11.0s) [✓ Local] — [Astaghfirullah Rabbi min kulli zambin]
+   [ ] Takbeer & Tahleel Zikir (16.4s) [✓ Local] — [Allahu Akbar and La ilaha illallah]
+   [ ] Madinah Adhan Fajr (42.1s) [☁ Cloud] — [Beautiful morning call to prayer]
  ─────────────────────────────────────────────────────────────────────────
    [➕] Import / Add Custom Sound (File or URL)...
-   [🔄] Update Community Sounds from GitHub
+   [🧹] Prune Unused Sounds (Free Disk Space)
+   [⬇️ ] Download All Community Sounds for Offline Use
+   [🔄] Update Community Catalog from GitHub
    [📂] Open Sound Library in Finder / File Manager
 ```
 
@@ -126,6 +130,32 @@ alarm --select codex          # Configure OpenAI Codex's sound
 alarm --select antigravity    # Configure Google Antigravity's sound
 alarm --select opencode       # Configure OpenCode's sound
 alarm --select global         # Configure Global Default fallback sound
+```
+
+---
+
+## ☁️ Zero-Cost On-Demand Cloud Streaming & Storage Management
+
+Even as the community audio library grows to hundreds of megabytes or gigabytes, `ai-alerm` keeps your local disk lean and clean using an **on-demand GitHub CDN architecture (100% free, zero paid services)**:
+
+* **Thin Metadata Catalog:** Only lightweight metadata (`sounds.json`) and active alerts are stored locally.
+* **On-Demand Streaming:** When you preview or select any `[☁ Cloud]` track, `ai-alerm` streams/downloads it directly from GitHub in under a second.
+* **Single-Track Deletion:** Press `[d]` anytime in the selector or run `alarm remove <name>` to delete a local file and free disk space.
+* **Smart Pruning (`alarm prune`):** Deletes all unused sound files in one click while **strictly protecting your active assigned agent alerts**.
+* **Offline Full Pack (`alarm restore`):** Going on an offline flight? Download all community sounds locally with a single command.
+
+```bash
+# Check disk usage and local vs cloud count
+alarm storage
+
+# Free disk space (keeps active agent tracks safe)
+alarm prune
+
+# Download all sounds for offline use
+alarm restore
+
+# Remove a specific track
+alarm remove custom-sound.mp3
 ```
 
 ---
@@ -274,17 +304,20 @@ alarm uninstall
 | `alarm` | Plays current alarm sound (auto-detects caller agent). |
 | `alarm <agent>` | Plays custom sound for a specific agent (`claude`, `codex`, `antigravity`, `opencode`). |
 | `alarm status` / `info` | Displays configuration dashboard and agent hook health. |
+| `alarm storage` / `cache` | Displays disk usage breakdown and local vs cloud track counts. |
+| `alarm prune` / `clean` | Deletes all unused sound files to save space, keeping active agent alerts safe. |
+| `alarm restore` / `download-all` | Downloads the complete community sound pack from GitHub for offline use. |
 | `alarm volume [0-100]` | Adjusts or inspects playback volume with a visual bar. |
 | `alarm mute` | Silences audio alerts while retaining desktop toasts. |
 | `alarm unmute` | Restores audio alert playback. |
 | `alarm notify [on\|off]` | Enables or disables native desktop notification banners. |
-| `alarm --select` / `-s` | Launches the interactive TUI audio selector. |
+| `alarm --select` / `-s` | Launches the interactive TUI audio selector (stream, download, delete). |
 | `alarm search <query>` | Searches sounds by title, description, or tag. |
-| `alarm update` / `sync` | Downloads latest community sounds from GitHub. |
-| `alarm set <sound> [agent]` | Directly sets sound for an agent without opening menu. |
+| `alarm update` / `sync` | Downloads latest community catalog from GitHub. |
+| `alarm set <sound> [agent]` | Directly sets sound for an agent (downloads on demand if cloud-only). |
 | `alarm add <path\|url>` | Imports custom sound or downloads from URL. |
 | `alarm open` | Opens sound library directory in Finder / File Manager. |
-| `alarm remove <name>` | Removes a sound file from library. |
+| `alarm remove <name>` | Removes a sound file from local disk (`rm`, `delete`). |
 | `alarm uninstall` | Cleanly removes all agent hooks, binaries, and configurations. |
 | `alarm --help` / `-ask` | Opens the comprehensive CLI manual. |
 | `notify` | Sends task-completion notifications to your configured Slack webhook. |

@@ -526,21 +526,189 @@ if [ "${1:-}" = "--add" ] || [ "${1:-}" = "add" ]; then
   exit $?
 fi
 
-# Remove command handler
-if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "remove" ]; then
+# Download sound track on-demand from GitHub (0-cost CDN)
+download_sound_track() {
+  local filename="$1"
+  mkdir -p "$INSTALL_DIR/sound"
+  if [ ! -f "$INSTALL_DIR/sound/$filename" ]; then
+    printf "\033[2K \033[1;36m ↓ Downloading %s from GitHub (0 cost)...\033[0m\n" "$filename"
+    curl -fsSL "$GITHUB_RAW/sound/$filename" -o "$INSTALL_DIR/sound/$filename" 2>/dev/null || return 1
+    printf "\033[1A"
+  fi
+  return 0
+}
+
+# Remove / Delete sound track from local storage
+if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "remove" ] || [ "${1:-}" = "rm" ] || [ "${1:-}" = "--delete" ] || [ "${1:-}" = "delete" ]; then
   TARGET_RM="$2"
   FOUND=false
   shopt -s nullglob nocaseglob
   for f in "$INSTALL_DIR/sound"/*; do
     if [ "$(basename "$f")" = "$TARGET_RM" ] || [ "$(basename "$f" | cut -d. -f1)" = "$TARGET_RM" ]; then
       rm -f "$f"
-      echo "✓ Removed sound: $f"
+      echo "✓ Removed sound from local storage: $f"
       FOUND=true
     fi
   done
   if [ "$FOUND" = false ]; then
     echo "⚠ Sound '$TARGET_RM' not found in $INSTALL_DIR/sound"
   fi
+  exit 0
+fi
+
+# Prune unused sounds (keep active assigned agent tracks, delete the rest)
+prune_sounds() {
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 🧹 Pruning Unused Sounds (Freeing Disk Space)..."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const installDir = process.argv[1];
+    const soundDir = path.join(installDir, "sound");
+
+    if (!fs.existsSync(soundDir)) {
+      console.log("Sound directory is empty.");
+      process.exit(0);
+    }
+
+    const assigned = new Set();
+    for (const f of fs.readdirSync(installDir)) {
+      if (f.startsWith("alarm_sound")) {
+        try {
+          const target = fs.readlinkSync(path.join(installDir, f));
+          assigned.add(path.basename(target));
+        } catch(e){}
+      }
+    }
+
+    const files = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f));
+    let deletedCount = 0;
+    let reclaimedBytes = 0;
+
+    for (const file of files) {
+      if (!assigned.has(file)) {
+        const fullPath = path.join(soundDir, file);
+        try {
+          const stats = fs.statSync(fullPath);
+          reclaimedBytes += stats.size;
+          fs.unlinkSync(fullPath);
+          deletedCount++;
+          console.log(`  ✓ Removed unused track: ${file}`);
+        } catch(e){}
+      }
+    }
+
+    const reclaimedMb = (reclaimedBytes / (1024 * 1024)).toFixed(2);
+    console.log(`\n🎉 Pruning complete! Removed ${deletedCount} unused sound(s), reclaimed ${reclaimedMb} MB.`);
+    console.log(`🛡️  Kept ${assigned.size} active sound(s) assigned to your AI agents.`);
+    console.log(`💡 You can re-download any community sound on demand anytime via \"alarm --select\".`);
+  ' "$INSTALL_DIR"
+}
+
+if [ "${1:-}" = "--prune" ] || [ "${1:-}" = "prune" ] || [ "${1:-}" = "clean" ] || [ "${1:-}" = "--clean" ]; then
+  prune_sounds
+  exit 0
+fi
+
+# Show storage & cache breakdown
+show_storage_info() {
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const installDir = process.argv[1];
+    const soundDir = path.join(installDir, "sound");
+
+    let catalog = {};
+    const catPath = path.join(soundDir, "sounds.json");
+    if (fs.existsSync(catPath)) {
+      try { catalog = JSON.parse(fs.readFileSync(catPath, "utf8")); } catch(e){}
+    }
+
+    const assigned = new Set();
+    if (fs.existsSync(installDir)) {
+      for (const f of fs.readdirSync(installDir)) {
+        if (f.startsWith("alarm_sound")) {
+          try {
+            const target = fs.readlinkSync(path.join(installDir, f));
+            assigned.add(path.basename(target));
+          } catch(e){}
+        }
+      }
+    }
+
+    let localCount = 0;
+    let totalBytes = 0;
+    if (fs.existsSync(soundDir)) {
+      const files = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f));
+      localCount = files.length;
+      for (const f of files) {
+        try { totalBytes += fs.statSync(path.join(soundDir, f)).size; } catch(e){}
+      }
+    }
+
+    const totalCatalog = Object.keys(catalog).length;
+    const mb = (totalBytes / (1024 * 1024)).toFixed(2);
+
+    console.log(`
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STORAGE & CACHE BREAKDOWN                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  Local Sounds Stored:    ${localCount} tracks (${mb} MB on disk)
+  Active Agent Sounds:    ${assigned.size} tracks (protected from pruning)
+  Total Catalog Sounds:   ${totalCatalog} community tracks available on GitHub
+
+  💡 Free up disk space:   alarm prune
+  💡 Download all sounds:  alarm restore
+  💡 Pick sound on-demand: alarm --select
+`);
+  ' "$INSTALL_DIR"
+}
+
+if [ "${1:-}" = "--storage" ] || [ "${1:-}" = "storage" ] || [ "${1:-}" = "cache" ] || [ "${1:-}" = "--cache" ]; then
+  show_storage_info
+  exit 0
+fi
+
+# Restore / Download all community sounds
+restore_all_sounds() {
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " ⬇️  Downloading Full Community Sound Pack..."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const { execSync } = require("child_process");
+    const soundDir = path.join(process.argv[1], "sound");
+    const githubRaw = process.argv[2];
+
+    const catPath = path.join(soundDir, "sounds.json");
+    let catalog = {};
+    if (fs.existsSync(catPath)) {
+      try { catalog = JSON.parse(fs.readFileSync(catPath, "utf8")); } catch(e){}
+    }
+
+    const tracks = Object.keys(catalog);
+    let downloaded = 0;
+    for (const t of tracks) {
+      const dest = path.join(soundDir, t);
+      if (!fs.existsSync(dest)) {
+        console.log(`  → Downloading ${t}...`);
+        try {
+          execSync(`curl -fsSL "${githubRaw}/sound/${t}" -o "${dest}"`);
+          downloaded++;
+        } catch(e){}
+      }
+    }
+    console.log(`\n🎉 Restore complete! Downloaded ${downloaded} track(s). All community sounds are cached locally.`);
+  ' "$INSTALL_DIR" "$GITHUB_RAW"
+}
+
+if [ "${1:-}" = "--restore" ] || [ "${1:-}" = "restore" ] || [ "${1:-}" = "download-all" ] || [ "${1:-}" = "--download-all" ]; then
+  restore_all_sounds
   exit 0
 fi
 
@@ -781,15 +949,17 @@ select_audio_flow() {
         try { catalog = JSON.parse(fs.readFileSync(catPath, "utf8")); } catch(e){}
       }
 
-      const files = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f));
+      const onDisk = new Set(fs.existsSync(soundDir) ? fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f)) : []);
+      const allKeys = Array.from(new Set([...onDisk, ...Object.keys(catalog)]));
       const categories = new Set(["all"]);
 
-      for (const f of files) {
+      for (const f of allKeys) {
         if (catalog[f] && catalog[f].category) categories.add(catalog[f].category.toLowerCase());
       }
 
       const list = [];
-      for (const f of files) {
+      for (const f of allKeys) {
+        const isLocal = onDisk.has(f);
         const meta = catalog[f] || {};
         const title = meta.title || f.replace(/\.[^.]+$/, "");
         const cat = (meta.category || "custom").toLowerCase();
@@ -803,9 +973,14 @@ select_audio_flow() {
 
         let display = title;
         if (dur) display += ` (${dur})`;
+        if (isLocal) {
+          display += ` \x1b[32m[✓ Local]\x1b[0m`;
+        } else {
+          display += ` \x1b[36m[☁ Cloud]\x1b[0m`;
+        }
         if (desc) display += ` — [${desc}]`;
 
-        list.push({ file: f, title, display, category: cat });
+        list.push({ file: f, title, display, category: cat, isLocal });
       }
 
       console.log(JSON.stringify({ list, categories: Array.from(categories) }));
@@ -832,8 +1007,12 @@ select_audio_flow() {
     # Add interactive actions
     local act_add_idx=${#DISPLAY_LIST[@]}
     DISPLAY_LIST+=("➕ [Import / Add Custom Sound (File or URL)...]")
+    local act_prune_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("🧹 [Prune Unused Sounds (Free Disk Space)]")
+    local act_restore_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("⬇️  [Download All Community Sounds for Offline Use]")
     local act_update_idx=${#DISPLAY_LIST[@]}
-    DISPLAY_LIST+=("🔄 [Update Community Sounds from GitHub]")
+    DISPLAY_LIST+=("🔄 [Update Community Catalog from GitHub]")
     local act_open_idx=${#DISPLAY_LIST[@]}
     DISPLAY_LIST+=("📂 [Open Sound Library in Finder]")
 
@@ -849,7 +1028,7 @@ select_audio_flow() {
     echo " 🔔 Select Alert Sound Track for: $header_label"
     echo " Filter: [\x1b[36m$active_category\x1b[0m] (press 'c' to cycle) | Search: \"\x1b[33m$search_query\x1b[0m\" (press '/' to filter)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo " Controls: [↑ / ↓] Navigate   [Space] ▶ Play/Stop Preview   [Enter] Select   [q] Cancel"
+    echo " Controls: [↑ / ↓] Navigate   [Space] ▶ Play   [Enter] Select   [d] 🗑 Delete file   [q] Cancel"
     echo ""
 
     local need_rerender=false
@@ -890,9 +1069,24 @@ select_audio_flow() {
         $'\033[B'|"j"|"J")
           [ "$current_idx" -lt $((total_rows - 1)) ] && current_idx=$((current_idx + 1)) || current_idx=0
           ;;
-        " ") # Space (toggle preview)
+        " ") # Space (toggle preview, downloading on demand if cloud)
           if [ "$current_idx" -lt "$ITEM_COUNT" ]; then
-            play_preview "$INSTALL_DIR/sound/${FILE_LIST[$current_idx]}"
+            local target_play="${FILE_LIST[$current_idx]}"
+            if [ ! -f "$INSTALL_DIR/sound/$target_play" ]; then
+              download_sound_track "$target_play"
+            fi
+            play_preview "$INSTALL_DIR/sound/$target_play"
+          fi
+          ;;
+        "d"|"D") # Delete local sound file from disk to save space
+          if [ "$current_idx" -lt "$ITEM_COUNT" ]; then
+            local target_del="${FILE_LIST[$current_idx]}"
+            if [ -f "$INSTALL_DIR/sound/$target_del" ]; then
+              stop_preview
+              rm -f "$INSTALL_DIR/sound/$target_del"
+              [ "$CURRENT_PLAYING_FILE" = "$INSTALL_DIR/sound/$target_del" ] && CURRENT_PLAYING_FILE=""
+              break
+            fi
           fi
           ;;
         "c"|"C") # Cycle category
@@ -934,6 +1128,18 @@ select_audio_flow() {
             else
               return 1
             fi
+          # Handle Action: Prune Unused Sounds
+          elif [ "$current_idx" -eq "$act_prune_idx" ]; then
+            prune_sounds
+            echo "Press Enter to return to menu..."
+            read -r _ < "$TTY_DEV"
+            break
+          # Handle Action: Download All Sounds
+          elif [ "$current_idx" -eq "$act_restore_idx" ]; then
+            restore_all_sounds
+            echo "Press Enter to return to menu..."
+            read -r _ < "$TTY_DEV"
+            break
           # Handle Action: Update Library
           elif [ "$current_idx" -eq "$act_update_idx" ]; then
             update_sound_library
@@ -947,6 +1153,9 @@ select_audio_flow() {
             return 0
           else
             chosen_file="${FILE_LIST[$current_idx]}"
+            if [ ! -f "$INSTALL_DIR/sound/$chosen_file" ]; then
+              download_sound_track "$chosen_file"
+            fi
           fi
 
           # Link chosen sound
