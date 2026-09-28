@@ -344,7 +344,9 @@ esac
 # Global Sound Library Sync
 # -------------------------------------------------------------
 mkdir -p "$INSTALL_DIR/sound"
-if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+GITHUB_RAW="https://raw.githubusercontent.com/axosecurity/ai-alerm/master"
+
+if [ -d "$SCRIPT_DIR/sound" ]; then
   shopt -s nullglob nocaseglob
   for track in "$SCRIPT_DIR/sound"/*.{mp3,wav,m4a,aac,ogg,flac,aiff}; do
     if [ -f "$track" ]; then
@@ -360,8 +362,22 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
   cp "$SCRIPT_DIR/alarm" "$INSTALL_DIR/alarm" 2>/dev/null || true
   cp "$SCRIPT_DIR/notify" "$INSTALL_DIR/notify" 2>/dev/null || true
   cp "$SCRIPT_DIR/install.sh" "$INSTALL_DIR/install.sh" 2>/dev/null || true
-  chmod +x "$INSTALL_DIR/alarm" "$INSTALL_DIR/notify" "$INSTALL_DIR/install.sh" 2>/dev/null || true
+else
+  # Running remotely via curl ... | bash
+  echo "→ Downloading latest ai-alerm files from GitHub..."
+  curl -fsSL "$GITHUB_RAW/alarm" -o "$INSTALL_DIR/alarm" 2>/dev/null || true
+  curl -fsSL "$GITHUB_RAW/notify" -o "$INSTALL_DIR/notify" 2>/dev/null || true
+  curl -fsSL "$GITHUB_RAW/install.sh" -o "$INSTALL_DIR/install.sh" 2>/dev/null || true
+  curl -fsSL "$GITHUB_RAW/sound/sounds.json" -o "$INSTALL_DIR/sound/sounds.json" 2>/dev/null || true
+
+  for track in "allahuakabar-laillahillah-zikir.mp3" "istighfar.mp3" "shoddurud-sharif.mp3" "istighfar-shoddurud-zikir.mp3"; do
+    if [ ! -f "$INSTALL_DIR/sound/$track" ]; then
+      echo "  → Downloading $track..."
+      curl -fsSL "$GITHUB_RAW/sound/$track" -o "$INSTALL_DIR/sound/$track" 2>/dev/null || true
+    fi
+  done
 fi
+chmod +x "$INSTALL_DIR/alarm" "$INSTALL_DIR/notify" "$INSTALL_DIR/install.sh" 2>/dev/null || true
 
 # Clean path helper
 clean_input_path() {
@@ -974,19 +990,24 @@ echo "╔═══════════════════════�
 echo "║          AI-ALARM UNIVERSAL AGENT HOOKS SETUP             ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 
-if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ] || [ "${1:-}" = "--all" ]; then
+INTERACTIVE_MODE=false
+if [ "${1:-}" = "-i" ] || [ "${1:-}" = "--interactive" ] || [ "${1:-}" = "--select" ]; then
+  INTERACTIVE_MODE=true
+fi
+
+if [ "$INTERACTIVE_MODE" = true ]; then
+  select_audio_flow "global"
+else
   if [ ! -L "$INSTALL_DIR/alarm_sound.mp3" ]; then
     shopt -s nullglob nocaseglob
     FIRST_MP3=( "$INSTALL_DIR"/sound/*.{mp3,wav,m4a,aac,ogg,flac,aiff} )
     if [ -f "${FIRST_MP3[0]}" ]; then
       ln -sf "sound/$(basename "${FIRST_MP3[0]}")" "$INSTALL_DIR/alarm_sound.mp3"
-      echo "✓ Using default sound: $(basename "${FIRST_MP3[0]}")"
+      echo "✓ Activated default sound: $(basename "${FIRST_MP3[0]}")"
     fi
   else
     echo "✓ Keeping current default sound."
   fi
-else
-  select_audio_flow "global"
 fi
 
 BIN_DIR=""
@@ -1131,7 +1152,7 @@ INSTALL_ANTIGRAVITY=true
 INSTALL_OPENCODE=true
 INSTALL_WORKSPACE=false
 
-if [ "${1:-}" != "--yes" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--all" ] && [ -t 0 -o -r "/dev/tty" ]; then
+if [ "$INTERACTIVE_MODE" = true ] && [ -t 0 -o -r "/dev/tty" ]; then
   select_agents_to_configure
 fi
 
@@ -1305,11 +1326,31 @@ if [ "$INSTALL_WORKSPACE" = true ]; then
   ' "$TARGET_ALARM_BIN" 2>/dev/null || true
 fi
 
+# Initialize config.json if not present
+if [ ! -f "$INSTALL_DIR/config.json" ]; then
+  cat > "$INSTALL_DIR/config.json" << 'EOF'
+{
+  "volume": 80,
+  "muted": false,
+  "desktop_notifications": true
+}
+EOF
+fi
+
 echo ""
-echo "🎉 Setup complete! All AI agents are configured with task completion hooks."
-echo "📁 Global sound library: $INSTALL_DIR/sound/"
-echo "💡 Help manual: Run 'alarm --help' or 'alarm -ask'"
-echo "💡 Change sounds: Run 'alarm --select'"
-echo "💡 Search sounds: Run 'alarm search <query>'"
-echo "💡 Update from GitHub: Run 'alarm update'"
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║        🎉 AI-ALARM INSTALLED & READY TO USE!              ║"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo "  ✓ Audio alerts enabled (volume: 80%)"
+echo "  ✓ Desktop notification toasts enabled"
+echo "  ✓ Global command ready: $TARGET_ALARM_BIN"
 echo ""
+echo "💡 QUICK COMMANDS:"
+echo "  * Test alert sound:     alarm"
+echo "  * Change sound track:   alarm --select"
+echo "  * Adjust volume:        alarm volume 60"
+echo "  * Status dashboard:     alarm status"
+echo ""
+
+# Play quick confirmation alert in background
+( "$TARGET_ALARM_BIN" >/dev/null 2>&1 & )

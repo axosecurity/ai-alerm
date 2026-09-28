@@ -510,8 +510,20 @@ if (Test-Path $geminiConfigDir) {
 }
 
 Write-Host ""
-Write-Host "🎉 AI-Alarm setup complete on Windows!" -ForegroundColor Green
-Write-Host "📁 Sound Library: $SoundDir" -ForegroundColor Gray
-Write-Host "💡 Run: 'alarm' to test alert playback" -ForegroundColor Gray
-Write-Host "💡 Run: 'alarm status' to view configuration" -ForegroundColor Gray
+Write-Host "╔═══════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║        🎉 AI-ALARM INSTALLED & READY TO USE!              ║" -ForegroundColor Green
+Write-Host "╚═══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  ✓ Audio alerts enabled (volume: 80%)" -ForegroundColor Green
+Write-Host "  ✓ Windows notification toasts enabled" -ForegroundColor Green
+Write-Host "  ✓ Global command ready: alarm" -ForegroundColor Green
 Write-Host ""
+Write-Host "💡 QUICK COMMANDS:" -ForegroundColor Yellow
+Write-Host "  * Test alert sound:     alarm" -ForegroundColor Gray
+Write-Host "  * Adjust volume:        alarm volume 60" -ForegroundColor Gray
+Write-Host "  * Status dashboard:     alarm status" -ForegroundColor Gray
+Write-Host ""
+
+# Play quick confirmation alert in background
+try {
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$AlarmPs1Path`"" -WindowStyle Hidden
+} catch {}

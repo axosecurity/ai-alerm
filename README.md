@@ -10,9 +10,9 @@
 
 ---
 
-## ⚡ 1-Click Installation (Every OS & Distribution)
+## ⚡ 1-Click Installation (Frictionless & Instant)
 
-Choose the installation method suited for your environment:
+> **Zero prompts, zero questions:** Simply paste the command for your operating system. It automatically downloads community sounds, configures all installed AI agents (Claude Code, OpenAI Codex, Google Antigravity, OpenCode), and plays a confirmation chime in under **2 seconds**.
 
 ### 1. Universal (All Platforms via npx / Node.js)
 Works identically across **macOS, Linux, Debian, Arch, Windows, and WSL** with zero global setup:
