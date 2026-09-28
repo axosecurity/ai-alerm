@@ -1,11 +1,12 @@
 {
   "name": "ai-alerm",
-  "version": "1.0.0",
-  "description": "Cross-agent task-completion audio alarm and notification hooks for Claude Code, Codex, Antigravity, and OpenCode",
+  "version": "1.2.0",
+  "description": "Universal cross-platform task-completion audio alarm and notification hooks for Claude Code, Codex, Antigravity, and OpenCode",
   "main": "alarm",
   "bin": {
     "ai-alerm": "./bin/cli.js",
-    "ai-alarm": "./bin/cli.js"
+    "ai-alarm": "./bin/cli.js",
+    "alarm": "./bin/alarm.js"
   },
   "repository": {
     "type": "git",
