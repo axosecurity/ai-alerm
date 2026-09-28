@@ -182,7 +182,7 @@ function resolveAudioFile(agent) {
 }
 
 // Audio Playback Engine
-function playAudio(soundPath, callback) {
+function playAudio(soundPath, callback, detached = false) {
   const cfg = loadConfig();
   if (cfg.muted) {
     if (callback) callback();
@@ -193,8 +193,13 @@ function playAudio(soundPath, callback) {
   const ratio = (vol / 100).toFixed(2);
 
   if (process.platform === 'darwin') {
-    const p = spawn('afplay', ['-v', ratio, soundPath], { stdio: 'ignore' });
-    p.on('exit', () => callback && callback());
+    const p = spawn('afplay', ['-v', ratio, soundPath], { detached, stdio: 'ignore' });
+    if (detached) {
+      p.unref();
+      if (callback) callback();
+    } else {
+      p.on('exit', () => callback && callback());
+    }
   } else if (process.platform === 'win32') {
     // Windows PowerShell Media Player
     const psScript = `
@@ -209,8 +214,13 @@ function playAudio(soundPath, callback) {
         try { (New-Object Media.SoundPlayer '${soundPath.replace(/'/g, "''")}').PlaySync() } catch {}
       }
     `;
-    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { stdio: 'ignore' });
-    p.on('exit', () => callback && callback());
+    const p = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], { detached, stdio: 'ignore' });
+    if (detached) {
+      p.unref();
+      if (callback) callback();
+    } else {
+      p.on('exit', () => callback && callback());
+    }
   } else {
     // Linux / BSD
     // Check available players: paplay, pw-cat, mpv, ffplay, aplay
@@ -227,8 +237,13 @@ function playAudio(soundPath, callback) {
     for (const player of tryPlayers) {
       try {
         execSync(`command -v ${player.cmd} 2>/dev/null`);
-        const p = spawn(player.cmd, player.args, { stdio: 'ignore' });
-        p.on('exit', () => callback && callback());
+        const p = spawn(player.cmd, player.args, { detached, stdio: 'ignore' });
+        if (detached) {
+          p.unref();
+          if (callback) callback();
+        } else {
+          p.on('exit', () => callback && callback());
+        }
         spawned = true;
         break;
       } catch (e) {}
@@ -562,10 +577,30 @@ function removeSound(target) {
     console.log('Usage: alarm remove <sound_name>');
     process.exit(1);
   }
+  const assigned = new Set();
+  const installFiles = fs.existsSync(INSTALL_DIR) ? fs.readdirSync(INSTALL_DIR) : [];
+  for (const f of installFiles) {
+    if (f.startsWith('alarm_sound')) {
+      const full = path.join(INSTALL_DIR, f);
+      try {
+        const trg = fs.readlinkSync(full);
+        assigned.add(path.basename(trg).toLowerCase());
+      } catch (e) {
+        assigned.add(f.toLowerCase());
+      }
+    }
+  }
+
   let found = false;
   const files = fs.existsSync(SOUND_DIR) ? fs.readdirSync(SOUND_DIR) : [];
   for (const f of files) {
     if (f.toLowerCase() === target.toLowerCase() || path.parse(f).name.toLowerCase() === target.toLowerCase()) {
+      if (assigned.has(f.toLowerCase())) {
+        console.log(`🛡️  Cannot remove '${f}': currently assigned to an active agent alert.`);
+        console.log(`💡 Reassign the agent to another sound first before deleting this track.`);
+        found = true;
+        continue;
+      }
       try {
         fs.unlinkSync(path.join(SOUND_DIR, f));
         console.log(`✓ Removed sound from local storage: ${f}`);
@@ -608,6 +643,7 @@ if (['prune', 'clean', '--prune', '--clean'].includes(cmd)) {
 // 2d. Restore / Download All Sounds
 if (['restore', 'download-all', '--restore', '--download-all'].includes(cmd)) {
   restoreSounds();
+  return;
 }
 
 // 2e. Remove / Delete Single Sound
@@ -715,49 +751,18 @@ if (['update', 'sync', '--update', '--sync'].includes(cmd)) {
     res.on('data', chunk => data += chunk);
     res.on('end', () => {
       try {
-        const catalog = JSON.parse(data);
-        fs.writeFileSync(path.join(SOUND_DIR, 'sounds.json'), JSON.stringify(catalog, null, 2) + '\n');
-        console.log(`✓ Updated sound catalog metadata (sound/sounds.json)`);
-
-        // Check for missing tracks
-        const tracks = Object.keys(catalog);
-        let downloaded = 0;
-        let pending = tracks.length;
-
-        if (tracks.length === 0) {
-          console.log('✓ All community sounds are up to date!');
-          process.exit(0);
+        const remoteCatalog = JSON.parse(data);
+        const catPath = path.join(SOUND_DIR, 'sounds.json');
+        let localCatalog = loadCatalog();
+        let newCount = 0;
+        for (const [filename, meta] of Object.entries(remoteCatalog)) {
+          if (!localCatalog[filename]) newCount++;
+          localCatalog[filename] = meta;
         }
-
-        for (const track of tracks) {
-          const dest = path.join(SOUND_DIR, track);
-          if (!fs.existsSync(dest)) {
-            console.log(`→ Downloading new community track: ${track}...`);
-            const fileStream = fs.createWriteStream(dest);
-            const trackUrl = `https://raw.githubusercontent.com/axosecurity/ai-alerm/master/sound/${encodeURIComponent(track)}`;
-            https.get(trackUrl, (r) => {
-              r.pipe(fileStream);
-              fileStream.on('finish', () => {
-                fileStream.close();
-                downloaded++;
-                pending--;
-                if (pending === 0) {
-                  console.log(`\n🎉 Sync complete! Downloaded ${downloaded} new track(s).`);
-                  process.exit(0);
-                }
-              });
-            }).on('error', () => {
-              pending--;
-              if (pending === 0) process.exit(0);
-            });
-          } else {
-            pending--;
-            if (pending === 0) {
-              console.log(`✓ All community sounds are up to date! (${downloaded} new tracks downloaded).`);
-              process.exit(0);
-            }
-          }
-        }
+        fs.writeFileSync(catPath, JSON.stringify(localCatalog, null, 2) + '\n');
+        console.log(`✓ Sound catalog updated! ${Object.keys(localCatalog).length} community tracks available (${newCount} new).`);
+        console.log(`💡 Sounds stream on demand when selected. To cache all sounds offline, run: alarm restore`);
+        process.exit(0);
       } catch (e) {
         console.error('Error parsing remote sounds.json:', e.message);
         process.exit(1);
@@ -937,7 +942,8 @@ if (agent === 'antigravity' || process.env.ANTIGRAVITY_APP_ROOT || process.env.A
 
 // Non-blocking background playback
 if (agent || !process.stdin.isTTY) {
-  playAudio(audioFile, () => process.exit(0));
+  playAudio(audioFile, null, true);
+  process.exit(0);
 } else {
-  playAudio(audioFile, () => process.exit(0));
+  playAudio(audioFile, () => process.exit(0), false);
 }

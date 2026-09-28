@@ -199,7 +199,7 @@ run_uninstall() {
     const fs = require("fs");
     const path = require("path");
     const p = path.join(process.env.HOME, ".claude", "settings.json");
-    if (!fs.existsSync(p)) return;
+    if (!fs.existsSync(p)) process.exit(0);
     try {
       let s = JSON.parse(fs.readFileSync(p, "utf8"));
       if (s.hooks && s.hooks.Stop) {
@@ -221,7 +221,7 @@ run_uninstall() {
     const fs = require("fs");
     const path = require("path");
     const p = path.join(process.env.HOME, ".codex", "config.toml");
-    if (!fs.existsSync(p)) return;
+    if (!fs.existsSync(p)) process.exit(0);
     try {
       let content = fs.readFileSync(p, "utf8");
       if (content.includes("alarm")) {
@@ -436,21 +436,15 @@ update_sound_library() {
 
     let newCount = 0;
     for (const [filename, meta] of Object.entries(remoteCatalog)) {
-      const localFile = path.join(installSoundDir, filename);
-      if (!fs.existsSync(localFile)) {
-        console.log(`  ↓ Downloading: ${meta.title || filename}...`);
-        try {
-          execSync(`curl -fsSL "${githubRaw}/sound/${filename}" -o "${localFile}"`);
-          newCount++;
-        } catch(err) {
-          console.log(`  ⚠ Failed to download ${filename}`);
-        }
+      if (!localCatalog[filename]) {
+        newCount++;
       }
       localCatalog[filename] = meta;
     }
 
     fs.writeFileSync(localJsonPath, JSON.stringify(localCatalog, null, 2) + "\n");
-    console.log(`✓ Sound catalog updated! ${newCount} new community tracks added.`);
+    console.log(`✓ Sound catalog updated! ${Object.keys(localCatalog).length} community tracks available (${newCount} new).`);
+    console.log(`💡 Sounds stream on demand when selected. To cache all sounds offline, run: alarm restore`);
   ' "$TMP_JSON" "$INSTALL_DIR/sound" "$GITHUB_RAW"
 
   rm -f "$TMP_JSON"
@@ -544,7 +538,21 @@ if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "remove" ] || [ "${1:-}" = "rm" ] |
   FOUND=false
   shopt -s nullglob nocaseglob
   for f in "$INSTALL_DIR/sound"/*; do
-    if [ "$(basename "$f")" = "$TARGET_RM" ] || [ "$(basename "$f" | cut -d. -f1)" = "$TARGET_RM" ]; then
+    base="$(basename "$f")"
+    if [ "$base" = "$TARGET_RM" ] || [ "${base%.*}" = "$TARGET_RM" ]; then
+      is_assigned=false
+      for link in "$INSTALL_DIR"/alarm_sound*.mp3; do
+        if [ -L "$link" ] && [ "$(basename "$(readlink "$link" 2>/dev/null)")" = "$base" ]; then
+          is_assigned=true
+          break
+        fi
+      done
+      if [ "$is_assigned" = true ]; then
+        echo "🛡️  Cannot remove '$base': currently assigned to an active agent alert."
+        echo "💡 Reassign the agent to another sound first before deleting this track."
+        FOUND=true
+        continue
+      fi
       rm -f "$f"
       echo "✓ Removed sound from local storage: $f"
       FOUND=true
@@ -1081,6 +1089,16 @@ select_audio_flow() {
         "d"|"D") # Delete local sound file from disk to save space
           if [ "$current_idx" -lt "$ITEM_COUNT" ]; then
             local target_del="${FILE_LIST[$current_idx]}"
+            local is_del_assigned=false
+            for link in "$INSTALL_DIR"/alarm_sound*.mp3; do
+              if [ -L "$link" ] && [ "$(basename "$(readlink "$link" 2>/dev/null)")" = "$target_del" ]; then
+                is_del_assigned=true
+                break
+              fi
+            done
+            if [ "$is_del_assigned" = true ]; then
+              continue
+            fi
             if [ -f "$INSTALL_DIR/sound/$target_del" ]; then
               stop_preview
               rm -f "$INSTALL_DIR/sound/$target_del"

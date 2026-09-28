@@ -509,9 +509,20 @@ if ($Command -in @("remove", "rm", "delete", "--remove", "--delete")) {
         Write-Host "Usage: alarm remove <sound_name>"
         exit 1
     }
+    $activeFiles = @()
+    Get-ChildItem -Path $InstallDir -File -Filter "alarm_sound*.mp3" -ErrorAction SilentlyContinue | ForEach-Object {
+        $activeFiles += $_.Name
+    }
+
     $found = $false
     Get-ChildItem -Path $SoundDir -File | ForEach-Object {
         if ($_.Name -eq $Arg1 -or $_.BaseName -eq $Arg1) {
+            if ($_.Name -in $activeFiles) {
+                Write-Host "🛡️  Cannot remove '$($_.Name)': currently assigned to an active agent alert." -ForegroundColor Yellow
+                Write-Host "💡 Reassign the agent to another sound first before deleting this track."
+                $found = $true
+                return
+            }
             Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
             Write-Host "✓ Removed sound from local storage: $($_.Name)" -ForegroundColor Green
             $found = $true

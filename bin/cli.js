@@ -16,8 +16,15 @@ let runnerArgs;
 
 if (isWin) {
   const installPs1 = path.join(__dirname, '..', 'install.ps1');
+  const psArgs = args.map(a => {
+    if (a === '--yes' || a === '-y' || a === 'yes') return '-Yes';
+    if (a === '--status' || a === 'status' || a === 'info' || a === '--info') return '-Status';
+    if (a === '--uninstall' || a === 'uninstall') return '-Uninstall';
+    if (a === '--help' || a === '-h' || a === 'help' || a === '-help') return '-Help';
+    return a;
+  });
   runner = 'powershell';
-  runnerArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installPs1, ...args];
+  runnerArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installPs1, ...psArgs];
 } else {
   const installSh = path.join(__dirname, '..', 'install.sh');
   runner = 'bash';
