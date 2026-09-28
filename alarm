@@ -30,6 +30,9 @@ COMMANDS & OPTIONS:
                               Supported: claude, codex, antigravity, opencode
     alarm --select [agent]    Interactive arrow-key sound selector (-s)
     alarm --list              List all audio files in the global sound library (-l)
+    alarm add <path|url>      Import a custom sound file or download from URL
+    alarm open                Open the sound library directory in Finder / File Manager
+    alarm remove <name>       Remove a sound file from the library (rm)
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
 
 INTERACTIVE SELECTOR:
@@ -39,6 +42,7 @@ INTERACTIVE SELECTOR:
       2. Sound track using [↑] / [↓] arrow keys
          - Press [Space] to listen to a live preview
          - Press [Enter] to confirm selection
+         - Or choose [➕ Import Custom Sound...] or [📂 Open in Finder]
          - Press [q] to cancel
 
     Shortcuts:
@@ -48,14 +52,17 @@ INTERACTIVE SELECTOR:
       alarm --select opencode       Quickly configure OpenCode's sound
       alarm --select global         Quickly configure Global Default sound
 
-GLOBAL SOUND LOCATION:
-    All audio tracks are loaded from:
+DYNAMIC SOUND MANAGEMENT:
+    📁 Global Sound Library:
         ~/.ai-alarm/sound/
 
-    Want to add your own sound?
-    Simply copy any .mp3 file into ~/.ai-alarm/sound/ and it will instantly
-    appear in the 'alarm --select' interactive menu!
-        cp my-alert.mp3 ~/.ai-alarm/sound/
+    Supported audio formats:
+        .mp3, .wav, .m4a, .aac, .ogg, .flac, .aiff
+
+    Three easy ways to add sounds:
+      1. Run: alarm add /path/to/my-sound.mp3
+      2. Run: alarm add https://example.com/sound.mp3
+      3. Run: alarm open  (opens Finder, simply drag and drop your audio files!)
 
 SUPPORTED AI AGENTS & HOOKS:
     🟣 Claude Code       ~/.claude/settings.json       (hooks.Stop)
@@ -67,7 +74,8 @@ EXAMPLES:
     alarm                     # Triggers alarm (used by hooks)
     alarm claude              # Play Claude's sound
     alarm --select            # Change sound interactively
-    alarm --select codex      # Change Codex's sound directly
+    alarm add ~/alert.mp3     # Import custom sound
+    alarm open                # Open sound directory in Finder
     alarm --list              # Show all available tracks
     alarm --help              # Show this manual
 EOF
@@ -80,6 +88,53 @@ case "${1:-}" in
     show_help
     ;;
 esac
+
+# Open sound library in Finder / File Manager
+if [ "${1:-}" = "open" ] || [ "${1:-}" = "--open" ] || [ "${1:-}" = "dir" ]; then
+  mkdir -p "$INSTALL_DIR/sound"
+  TARGET_DIR="$INSTALL_DIR/sound"
+  if [ -n "$SOUND_DIR" ] && [ -d "$SOUND_DIR" ]; then
+    TARGET_DIR="$SOUND_DIR"
+  fi
+  if command -v open >/dev/null 2>&1; then
+    open "$TARGET_DIR"
+    echo "✓ Opened sound library in Finder: $TARGET_DIR"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$TARGET_DIR"
+    echo "✓ Opened sound library: $TARGET_DIR"
+  else
+    echo "Sound library located at: $TARGET_DIR"
+  fi
+  exit 0
+fi
+
+# Add / Import sound
+if [ "${1:-}" = "add" ] || [ "${1:-}" = "--add" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: alarm add <file_path_or_url>"
+    echo "Example: alarm add ~/Downloads/alert.mp3"
+    echo "Example: alarm add https://example.com/sound.mp3"
+    exit 1
+  fi
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --add "$2" "${3:-}"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --add "$2" "${3:-}"
+  fi
+fi
+
+# Remove sound
+if [ "${1:-}" = "remove" ] || [ "${1:-}" = "rm" ] || [ "${1:-}" = "--remove" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: alarm remove <sound_name>"
+    exit 1
+  fi
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --remove "$2"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --remove "$2"
+  fi
+fi
 
 # Interactive selector flag
 if [ "${1:-}" = "--select" ] || [ "${1:-}" = "-s" ]; then
@@ -94,7 +149,7 @@ if [ "${1:-}" = "--select" ] || [ "${1:-}" = "-s" ]; then
   fi
 fi
 
-# List available sounds
+# List available sounds (Multi-format support)
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then
   if [ -z "$SOUND_DIR" ] || [ ! -d "$SOUND_DIR" ]; then
     echo "⚠ Sound directory not found. Expected at: $INSTALL_DIR/sound"
@@ -103,14 +158,22 @@ if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo " 📁 Global Sound Library: $SOUND_DIR"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  for f in "$SOUND_DIR"/*.mp3; do
+  shopt -s nullglob nocaseglob
+  FOUND=0
+  for f in "$SOUND_DIR"/*.{mp3,wav,m4a,aac,ogg,flac,aiff}; do
     if [ -f "$f" ]; then
-      base="$(basename "$f" .mp3)"
-      echo "  ♪ $base ($(basename "$f"))"
+      base="${f##*/}"
+      ext="${base##*.}"
+      name="${base%.*}"
+      echo "  ♪ $name ($base)"
+      FOUND=$((FOUND + 1))
     fi
   done
+  if [ "$FOUND" -eq 0 ]; then
+    echo "  (No sound tracks found)"
+  fi
   echo ""
-  echo "💡 Tip: Copy any .mp3 file here to use it with 'alarm --select'"
+  echo "💡 Tip: Run 'alarm add <file_or_url>' or 'alarm open' to add sounds"
   exit 0
 fi
 
@@ -118,7 +181,6 @@ fi
 # Sound Playback & Agent Detection
 # =================================================================
 
-# 1. Determine Agent (Explicit parameter or Auto-Detection)
 AGENT=""
 case "${1:-}" in
   claude|codex|antigravity|opencode)
@@ -131,13 +193,11 @@ esac
 
 # Auto-detect caller if not explicitly passed
 if [ -z "$AGENT" ]; then
-  # Check environment variables
   if [ -n "${CLAUDE_CONFIG_DIR:-}" ] || [ -n "${CLAUDE_SESSION_ID:-}" ]; then
     AGENT="claude"
   elif [ -n "${CODEX_SESSION_ID:-}" ] || [ -n "${CODEX_PROJECT_ROOT:-}" ]; then
     AGENT="codex"
   else
-    # Inspect parent process tree
     PARENT_COMM="$(ps -o comm= -p "$PPID" 2>/dev/null || true)"
     GRANDPARENT_PID="$(ps -o ppid= -p "$PPID" 2>/dev/null || true | tr -d ' ')"
     GRANDPARENT_COMM=""
@@ -158,34 +218,43 @@ if [ -z "$AGENT" ]; then
   fi
 fi
 
-# 2. Locate Sound File (Agent-Specific -> Global Default Fallback)
+# Locate Sound File
 SOUND=""
 
-# Try agent specific sound first
-if [ -n "$AGENT" ]; then
-  if [ -f "$INSTALL_DIR/alarm_sound_${AGENT}.mp3" ]; then
-    SOUND="$INSTALL_DIR/alarm_sound_${AGENT}.mp3"
-  elif [ -f "$DIR/alarm_sound_${AGENT}.mp3" ]; then
-    SOUND="$DIR/alarm_sound_${AGENT}.mp3"
-  fi
-fi
-
-# Fallback to default alarm sound
-if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
-  if [ -f "$INSTALL_DIR/alarm_sound.mp3" ]; then
-    SOUND="$INSTALL_DIR/alarm_sound.mp3"
-  elif [ -f "$DIR/alarm_sound.mp3" ]; then
-    SOUND="$DIR/alarm_sound.mp3"
-  fi
-fi
-
-# Final fallback: pick first mp3 in sound library
-if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
-  if [ -n "$SOUND_DIR" ] && [ -d "$SOUND_DIR" ]; then
-    FIRST_MP3=( "$SOUND_DIR"/*.mp3 )
-    if [ -f "${FIRST_MP3[0]}" ]; then
-      SOUND="${FIRST_MP3[0]}"
+find_audio_file() {
+  local prefix="$1"
+  shopt -s nullglob nocaseglob
+  for candidate in "$prefix".{mp3,wav,m4a,aac,ogg,flac,aiff}; do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
     fi
+  done
+  echo ""
+}
+
+# 1. Agent custom sound
+if [ -n "$AGENT" ]; then
+  SOUND="$(find_audio_file "$INSTALL_DIR/alarm_sound_${AGENT}")"
+  if [ -z "$SOUND" ]; then
+    SOUND="$(find_audio_file "$DIR/alarm_sound_${AGENT}")"
+  fi
+fi
+
+# 2. Global default sound
+if [ -z "$SOUND" ]; then
+  SOUND="$(find_audio_file "$INSTALL_DIR/alarm_sound")"
+  if [ -z "$SOUND" ]; then
+    SOUND="$(find_audio_file "$DIR/alarm_sound")"
+  fi
+fi
+
+# 3. First sound in library
+if [ -z "$SOUND" ] && [ -n "$SOUND_DIR" ] && [ -d "$SOUND_DIR" ]; then
+  shopt -s nullglob nocaseglob
+  FIRST_AUDIO=( "$SOUND_DIR"/*.{mp3,wav,m4a,aac,ogg,flac,aiff} )
+  if [ -f "${FIRST_AUDIO[0]}" ]; then
+    SOUND="${FIRST_AUDIO[0]}"
   fi
 fi
 
@@ -195,7 +264,7 @@ if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
   exit 1
 fi
 
-# 3. Play Sound using native system player
+# Play Sound using native system player
 play_audio() {
   if command -v afplay >/dev/null 2>&1; then
     afplay "$SOUND"

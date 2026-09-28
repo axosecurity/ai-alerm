@@ -49,15 +49,25 @@ Following the design pattern of modern Unix CLI tools (like Starship, Oh-My-Zsh,
 └── shoddurud-sharif.mp3
 ```
 
-### Adding Custom Sounds:
-Want to use your own nasheed, zikir, chime, or alert?
-Simply copy any `.mp3` into your global sound directory:
+### Adding Custom Sounds (3 Easy Ways):
 
-```bash
-cp /path/to/my-sound.mp3 ~/.ai-alarm/sound/
-```
+1. **Direct CLI Import (Local file or URL):**
+   ```bash
+   alarm add ~/Downloads/my-sound.mp3
+   # or directly from the web:
+   alarm add https://example.com/chime.wav
+   ```
 
-It will **instantly appear** in the interactive selector without touching any configuration or code!
+2. **Open in Finder / File Manager:**
+   ```bash
+   alarm open
+   ```
+   Opens `~/.ai-alarm/sound/` in macOS Finder so you can simply drag & drop your audio files!
+
+3. **In the Interactive Menu:**
+   Run `alarm --select` and pick `➕ [Import / Add Custom Sound...]` to drag & drop right into the terminal!
+
+Supported formats: **`.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`, `.flac`, `.aiff`**
 
 ---
 
