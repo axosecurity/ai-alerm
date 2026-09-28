@@ -87,22 +87,28 @@ alarm --select
    - 🔵 Google Antigravity
    - 🟡 OpenCode
 
-2. **Pick Sound with Arrow Keys:**
+2. **Pick Sound with Rich Controls & Filter:**
    - **`[↑]` / `[↓]` (or `k` / `j`)**: Navigate tracks
-   - **`[Space]`**: Test-play a live preview
+   - **`[Space]`**: Toggle live audio preview (shows `▶ Playing...`)
+   - **`[/]`**: Type keyword to instant-search
+   - **`[c]`**: Cycle category filter (`[All]`, `[zikir]`, `[durood]`, `[istighfar]`)
    - **`[Enter]`**: Select and activate
    - **`[q]`**: Cancel
 
 ```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- 🔔 Select Sound Track for: Claude Code
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- Controls: [↑ / ↓] Navigate   [Space] Preview   [Enter] Select   [q] Cancel
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🔔 Select Alert Sound Track for: Global Default
+ Filter: [zikir] (press 'c' to cycle) | Search: "forgiveness" (press '/' to filter)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Controls: [↑ / ↓] Navigate   [Space] ▶ Play/Stop Preview   [Enter] Select   [q] Cancel
 
-   [ ] allahuakabar-laillahillah-zikir
- ❯ [●] istighfar-shoddurud-zikir
-   [ ] istighfar
-   [ ] shoddurud-sharif
+ ❯ [●] Combined Istighfar + Durood (18.7s) — [Astaghfirullah + Durood on Prophet]  ▶ Playing...
+   [ ] Astaghfirullah Short (11.0s) — [Astaghfirullah Rabbi min kulli zambin]
+   [ ] Takbeer & Tahleel Zikir (16.4s) — [Allahu Akbar and La ilaha illallah]
+ ─────────────────────────────────────────────────────────────────────────
+   [➕] Import / Add Custom Sound (File or URL)...
+   [🔄] Update Community Sounds from GitHub
+   [📂] Open Sound Library in Finder
 ```
 
 ### Direct Shortcuts:
@@ -113,6 +119,29 @@ alarm --select antigravity    # Set sound specifically for Google Antigravity
 alarm --select opencode       # Set sound specifically for OpenCode
 alarm --select global         # Set the global default fallback sound
 ```
+
+---
+
+## 🔍 Search & Community Sync
+
+```bash
+# Search sounds by keyword, title, tag, or description
+alarm search forgiveness
+alarm search prophet
+
+# Download newly added community sounds from GitHub
+alarm update
+
+# Set sound directly without opening the menu
+alarm set istighfar.mp3 codex
+```
+
+---
+
+## 🤝 Contributing Sounds
+
+Want to add your favorite zikir, adhan, or chime to `ai-alerm`?
+We welcome community contributions! Please read our [**Contributing Guide (CONTRIBUTING.md)**](CONTRIBUTING.md) to add your sound in 3 simple steps.
 
 ---
 
@@ -144,7 +173,12 @@ Does custom sound exist? (~/.ai-alarm/alarm_sound_claude.mp3)
 * **`alarm`**: Plays current alarm sound (auto-detects calling agent).
 * **`alarm <agent>`**: Plays custom sound for a specific agent (`claude`, `codex`, `antigravity`, `opencode`).
 * **`alarm --select`** / **`-s`**: Launches the interactive audio selector.
-* **`alarm --list`** / **`-l`**: Lists all available sound files in the global sound library.
+* **`alarm search <query>`**: Searches sounds by title, description, or tag.
+* **`alarm update`** / **`sync`**: Downloads latest community sounds from GitHub.
+* **`alarm set <sound> [agent]`**: Directly sets sound for an agent without menu.
+* **`alarm add <path|url>`**: Imports a custom sound or downloads from URL.
+* **`alarm open`**: Opens sound library directory in Finder.
+* **`alarm remove <name>`**: Removes a sound file from library.
 * **`alarm -help`** / **`-ask`** / **`--help`**: Opens the comprehensive CLI manual.
 * **`notify`**: Sends task-completion notifications to your configured Slack webhook.
 
@@ -154,3 +188,4 @@ Does custom sound exist? (~/.ai-alarm/alarm_sound_claude.mp3)
 
 * **macOS** (`afplay`) or **Linux** (`paplay`, `mpv`, `ffplay`, or `aplay`).
 * **Node.js** (for running via `npx`).
+

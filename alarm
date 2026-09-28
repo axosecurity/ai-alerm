@@ -29,21 +29,23 @@ COMMANDS & OPTIONS:
     alarm <agent>             Play custom sound assigned to specific agent
                               Supported: claude, codex, antigravity, opencode
     alarm --select [agent]    Interactive arrow-key sound selector (-s)
+    alarm search <query>      Search sounds by title, description, or tag
+    alarm update              Download latest community sounds from GitHub (sync)
+    alarm set <sound> [agent] Directly activate a sound track without menu
     alarm --list              List all audio files in the global sound library (-l)
     alarm add <path|url>      Import a custom sound file or download from URL
     alarm open                Open the sound library directory in Finder / File Manager
     alarm remove <name>       Remove a sound file from the library (rm)
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
 
-INTERACTIVE SELECTOR:
+INTERACTIVE SELECTOR FEATURES:
     Run: alarm --select
-    You will be prompted to choose:
-      1. Target (Global Default, Claude Code, Codex, Antigravity, or OpenCode)
-      2. Sound track using [↑] / [↓] arrow keys
-         - Press [Space] to listen to a live preview
-         - Press [Enter] to confirm selection
-         - Or choose [➕ Import Custom Sound...] or [📂 Open in Finder]
-         - Press [q] to cancel
+    * [↑] / [↓] : Navigate between sounds
+    * [Space]   : Toggle live audio preview (shows ▶ Playing...)
+    * [/]       : Filter / Search sounds on the fly
+    * [c]       : Cycle through categories ([All], [zikir], [durood], [istighfar])
+    * [Enter]   : Confirm selection
+    * [q]       : Cancel
 
     Shortcuts:
       alarm --select claude         Quickly configure Claude Code's sound
@@ -59,10 +61,11 @@ DYNAMIC SOUND MANAGEMENT:
     Supported audio formats:
         .mp3, .wav, .m4a, .aac, .ogg, .flac, .aiff
 
-    Three easy ways to add sounds:
-      1. Run: alarm add /path/to/my-sound.mp3
-      2. Run: alarm add https://example.com/sound.mp3
-      3. Run: alarm open  (opens Finder, simply drag and drop your audio files!)
+    Ways to manage sounds:
+      1. Run: alarm update              (syncs latest community sounds from GitHub)
+      2. Run: alarm search <keyword>    (searches titles, descriptions, and tags)
+      3. Run: alarm add /path/to/sound  (imports custom sound)
+      4. Run: alarm open                (opens Finder to drag & drop files!)
 
 SUPPORTED AI AGENTS & HOOKS:
     🟣 Claude Code       ~/.claude/settings.json       (hooks.Stop)
@@ -74,6 +77,8 @@ EXAMPLES:
     alarm                     # Triggers alarm (used by hooks)
     alarm claude              # Play Claude's sound
     alarm --select            # Change sound interactively
+    alarm search forgiveness  # Search for istighfar sounds
+    alarm update              # Download new sounds from GitHub
     alarm add ~/alert.mp3     # Import custom sound
     alarm open                # Open sound directory in Finder
     alarm --list              # Show all available tracks
@@ -88,6 +93,43 @@ case "${1:-}" in
     show_help
     ;;
 esac
+
+# Update community sounds from GitHub
+if [ "${1:-}" = "update" ] || [ "${1:-}" = "--update" ] || [ "${1:-}" = "sync" ] || [ "${1:-}" = "--sync" ]; then
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --update
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --update
+  fi
+fi
+
+# Search sounds
+if [ "${1:-}" = "search" ] || [ "${1:-}" = "--search" ] || [ "${1:-}" = "find" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: alarm search <keyword>"
+    echo "Example: alarm search istighfar"
+    echo "Example: alarm search prophet"
+    exit 1
+  fi
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" --search "$2"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" --search "$2"
+  fi
+fi
+
+# Set sound directly
+if [ "${1:-}" = "set" ] || [ "${1:-}" = "--set" ]; then
+  if [ -z "${2:-}" ]; then
+    echo "Usage: alarm set <sound_filename_or_name> [agent]"
+    exit 1
+  fi
+  if [ -x "$DIR/install.sh" ]; then
+    exec "$DIR/install.sh" set "$2" "${3:-}"
+  elif [ -x "$INSTALL_DIR/install.sh" ]; then
+    exec "$INSTALL_DIR/install.sh" set "$2" "${3:-}"
+  fi
+fi
 
 # Open sound library in Finder / File Manager
 if [ "${1:-}" = "open" ] || [ "${1:-}" = "--open" ] || [ "${1:-}" = "dir" ]; then

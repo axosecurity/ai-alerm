@@ -1,0 +1,34 @@
+{
+  "allahuakabar-laillahillah-zikir.mp3": {
+    "title": "Takbeer & Tahleel Zikir",
+    "description": "Allahu Akbar and La ilaha illallah reminder",
+    "duration": "16.4s",
+    "category": "zikir",
+    "contributor": "axosecurity",
+    "tags": ["zikir", "takbeer", "tahleel", "peaceful", "islamic"]
+  },
+  "istighfar.mp3": {
+    "title": "Astaghfirullah (Short Istighfar)",
+    "description": "Astaghfirullah Rabbi min kulli zambin wa atoobu ilayh",
+    "duration": "11.0s",
+    "category": "istighfar",
+    "contributor": "axosecurity",
+    "tags": ["istighfar", "forgiveness", "repentance", "short", "zikir"]
+  },
+  "shoddurud-sharif.mp3": {
+    "title": "Choto Durood Sharif",
+    "description": "Sallallahu Alaihi Wa Sallam on Prophet Muhammad (PBUH)",
+    "duration": "7.7s",
+    "category": "durood",
+    "contributor": "axosecurity",
+    "tags": ["durood", "salawat", "prophet", "short", "blessing"]
+  },
+  "istighfar-shoddurud-zikir.mp3": {
+    "title": "Combined Istighfar + Durood Sharif",
+    "description": "Astaghfirullah followed by blessings upon Prophet Muhammad (PBUH)",
+    "duration": "18.7s",
+    "category": "zikir",
+    "contributor": "axosecurity",
+    "tags": ["istighfar", "durood", "combined", "complete", "peaceful"]
+  }
+}

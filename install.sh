@@ -4,6 +4,7 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${HOME}/.ai-alarm"
 PREVIEW_PID=""
+CURRENT_PLAYING_FILE=""
 
 cleanup() {
   tput cnorm 2>/dev/null || printf "\033[?25h"
@@ -25,23 +26,14 @@ USAGE:
     npx github:axosecurity/ai-alerm [OPTIONS]
 
 OPTIONS:
-    --select-only [agent]   Only launch interactive sound selector (-s)
-                            Optional agent: claude, codex, antigravity, opencode, global
+    --select-only [agent]   Launch interactive sound selector (-s)
+    --search <query>        Search sound library by name, tag, or description
+    --update                Update community sound library from GitHub (sync)
     --add <path|url>        Import custom sound to ~/.ai-alarm/sound/
     --open                  Open sound library in Finder / File Manager
     --remove <name>         Remove sound track from library
     --project               Also write hook to project workspace (.agents/hooks.json)
     --help | -help          Show this documentation manual (-h, --ask, -ask)
-
-WHAT THE INSTALLER DOES:
-    1. Sets up the permanent global sound library at: ~/.ai-alarm/sound/
-    2. Lets you choose default and per-agent sounds using interactive arrow keys
-    3. Installs 'alarm' and 'notify' to your PATH (/opt/homebrew/bin or ~/.local/bin)
-    4. Automatically configures native Stop hooks for:
-       - Claude Code (~/.claude/settings.json)
-       - OpenAI Codex (~/.codex/config.toml)
-       - Google Antigravity (~/.gemini/config/hooks.json, CLI, 2.0, IDE)
-       - OpenCode (~/.config/opencode/plugins/task-finished-alarm.ts)
 EOF
   exit 0
 }
@@ -66,13 +58,16 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       fi
     fi
   done
+  if [ -f "$SCRIPT_DIR/sound/sounds.json" ] && [ ! -f "$INSTALL_DIR/sound/sounds.json" ]; then
+    cp "$SCRIPT_DIR/sound/sounds.json" "$INSTALL_DIR/sound/sounds.json"
+  fi
   cp "$SCRIPT_DIR/alarm" "$INSTALL_DIR/alarm" 2>/dev/null || true
   cp "$SCRIPT_DIR/notify" "$INSTALL_DIR/notify" 2>/dev/null || true
   cp "$SCRIPT_DIR/install.sh" "$INSTALL_DIR/install.sh" 2>/dev/null || true
   chmod +x "$INSTALL_DIR/alarm" "$INSTALL_DIR/notify" "$INSTALL_DIR/install.sh" 2>/dev/null || true
 fi
 
-# Clean path helper (strips surrounding quotes, unescapes, expands tilde)
+# Clean path helper
 clean_input_path() {
   local raw="$1"
   node -e '
@@ -85,6 +80,75 @@ clean_input_path() {
     console.log(p);
   ' "$raw" 2>/dev/null || echo "$raw"
 }
+
+# -------------------------------------------------------------
+# Community Sound Library Updater (from GitHub)
+# -------------------------------------------------------------
+update_sound_library() {
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 🔄 Updating Sound Library from GitHub..."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  local GITHUB_RAW="https://raw.githubusercontent.com/axosecurity/ai-alerm/master"
+  local TMP_JSON="/tmp/ai_alarm_sounds_update.json"
+
+  if ! curl -fsSL "$GITHUB_RAW/sound/sounds.json" -o "$TMP_JSON" 2>/dev/null; then
+    echo "⚠ Unable to reach GitHub. Please check internet connection."
+    return 1
+  fi
+
+  mkdir -p "$INSTALL_DIR/sound"
+  local downloaded_count=0
+
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const { execSync } = require("child_process");
+
+    const tmpJson = process.argv[1];
+    const installSoundDir = process.argv[2];
+    const githubRaw = process.argv[3];
+
+    let remoteCatalog = {};
+    try {
+      remoteCatalog = JSON.parse(fs.readFileSync(tmpJson, "utf8"));
+    } catch(e) {
+      process.exit(1);
+    }
+
+    let localCatalog = {};
+    const localJsonPath = path.join(installSoundDir, "sounds.json");
+    if (fs.existsSync(localJsonPath)) {
+      try { localCatalog = JSON.parse(fs.readFileSync(localJsonPath, "utf8")); } catch(e){}
+    }
+
+    let newCount = 0;
+    for (const [filename, meta] of Object.entries(remoteCatalog)) {
+      const localFile = path.join(installSoundDir, filename);
+      if (!fs.existsSync(localFile)) {
+        console.log(`  ↓ Downloading: ${meta.title || filename}...`);
+        try {
+          execSync(`curl -fsSL "${githubRaw}/sound/${filename}" -o "${localFile}"`);
+          newCount++;
+        } catch(err) {
+          console.log(`  ⚠ Failed to download ${filename}`);
+        }
+      }
+      localCatalog[filename] = meta;
+    }
+
+    fs.writeFileSync(localJsonPath, JSON.stringify(localCatalog, null, 2) + "\n");
+    console.log(`✓ Sound catalog updated! ${newCount} new community tracks added.`);
+  ' "$TMP_JSON" "$INSTALL_DIR/sound" "$GITHUB_RAW"
+
+  rm -f "$TMP_JSON"
+}
+
+# Update handler
+if [ "${1:-}" = "--update" ] || [ "${1:-}" = "update" ] || [ "${1:-}" = "sync" ] || [ "${1:-}" = "--sync" ]; then
+  update_sound_library
+  exit $?
+fi
 
 # Add sound function
 add_sound_file() {
@@ -99,7 +163,6 @@ add_sound_file() {
 
   mkdir -p "$INSTALL_DIR/sound"
 
-  # Case A: URL download
   if [[ "$input" =~ ^https?:// ]]; then
     local filename
     filename="$(basename "$input" | cut -d? -f1)"
@@ -118,7 +181,6 @@ add_sound_file() {
     fi
   fi
 
-  # Case B: Local file
   if [ ! -f "$input" ]; then
     echo "⚠ Error: File not found at: $input"
     return 1
@@ -142,8 +204,6 @@ if [ "${1:-}" = "--open" ] || [ "${1:-}" = "open" ]; then
   elif command -v xdg-open >/dev/null 2>&1; then
     xdg-open "$INSTALL_DIR/sound"
     echo "✓ Opened sound library: $INSTALL_DIR/sound"
-  else
-    echo "Sound library located at: $INSTALL_DIR/sound"
   fi
   exit 0
 fi
@@ -172,16 +232,108 @@ if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "remove" ]; then
   exit 0
 fi
 
+# Search command handler
+search_sounds_cli() {
+  local query="$1"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 🔍 Sound Library Search: \"$query\""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+
+    const soundDir = process.argv[1];
+    const q = process.argv[2].toLowerCase();
+
+    let catalog = {};
+    const jsonPath = path.join(soundDir, "sounds.json");
+    if (fs.existsSync(jsonPath)) {
+      try { catalog = JSON.parse(fs.readFileSync(jsonPath, "utf8")); } catch(e){}
+    }
+
+    const files = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f));
+    let matches = 0;
+
+    for (const file of files) {
+      const meta = catalog[file] || {};
+      const title = meta.title || file;
+      const desc = meta.description || "";
+      const cat = meta.category || "custom";
+      const tags = (meta.tags || []).join(" ");
+      const matchText = `${file} ${title} ${desc} ${cat} ${tags}`.toLowerCase();
+
+      if (matchText.includes(q)) {
+        matches++;
+        console.log(`\n  ♪ \x1b[1;32m${title}\x1b[0m (${meta.duration || "?"}) [\x1b[36m${cat}\x1b[0m]`);
+        if (desc) console.log(`    Description: ${desc}`);
+        if (meta.contributor) console.log(`    Contributor: @${meta.contributor}`);
+        console.log(`    File: ${file}`);
+        console.log(`    Select: alarm set "${file}"`);
+      }
+    }
+
+    if (matches === 0) {
+      console.log("  (No matching sounds found)");
+    } else {
+      console.log(`\nFound ${matches} match(es).`);
+    }
+  ' "$INSTALL_DIR/sound" "$query"
+}
+
+if [ "${1:-}" = "--search" ] || [ "${1:-}" = "search" ]; then
+  search_sounds_cli "${2:-}"
+  exit 0
+fi
+
+# Set sound command handler
+if [ "${1:-}" = "set" ] || [ "${1:-}" = "--set" ]; then
+  TARGET_SOUND="$2"
+  TARGET_AGENT="${3:-global}"
+  if [ -z "$TARGET_SOUND" ]; then
+    echo "Usage: alarm set <sound_filename> [agent]"
+    exit 1
+  fi
+  MATCH_FILE=""
+  shopt -s nullglob nocaseglob
+  for f in "$INSTALL_DIR/sound"/*; do
+    if [ "$(basename "$f")" = "$TARGET_SOUND" ] || [ "$(basename "$f" | cut -d. -f1)" = "$TARGET_SOUND" ]; then
+      MATCH_FILE="$(basename "$f")"
+      break
+    fi
+  done
+  if [ -z "$MATCH_FILE" ]; then
+    echo "⚠ Error: Sound '$TARGET_SOUND' not found in $INSTALL_DIR/sound"
+    exit 1
+  fi
+  if [ "$TARGET_AGENT" = "global" ]; then
+    ln -sf "sound/$MATCH_FILE" "$INSTALL_DIR/alarm_sound.mp3"
+    echo "✓ Set Global Default sound → $MATCH_FILE"
+  else
+    ln -sf "sound/$MATCH_FILE" "$INSTALL_DIR/alarm_sound_${TARGET_AGENT}.mp3"
+    echo "✓ Set $TARGET_AGENT sound → $MATCH_FILE"
+  fi
+  exit 0
+fi
+
 stop_preview() {
   if [ -n "$PREVIEW_PID" ] && kill -0 "$PREVIEW_PID" 2>/dev/null; then
     kill "$PREVIEW_PID" 2>/dev/null || true
     PREVIEW_PID=""
+    CURRENT_PLAYING_FILE=""
   fi
 }
 
 play_preview() {
   local audio_file="$1"
+  if [ "$CURRENT_PLAYING_FILE" = "$audio_file" ] && [ -n "$PREVIEW_PID" ] && kill -0 "$PREVIEW_PID" 2>/dev/null; then
+    stop_preview
+    return
+  fi
+
   stop_preview
+  CURRENT_PLAYING_FILE="$audio_file"
   if command -v afplay >/dev/null 2>&1; then
     (afplay "$audio_file") &
     PREVIEW_PID=$!
@@ -201,108 +353,7 @@ play_preview() {
 }
 
 # -------------------------------------------------------------
-# Reusable Arrow-Key Menu
-# -------------------------------------------------------------
-run_menu() {
-  local header="$1"
-  shift
-  local is_sound_menu="$1"
-  shift
-  local -a items=("$@")
-  local num_items=${#items[@]}
-  local current=0
-
-  local TTY_DEV="/dev/tty"
-  if [ ! -r "$TTY_DEV" ]; then
-    TTY_DEV="/dev/stdin"
-  fi
-
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "$header"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  if [ "$is_sound_menu" = true ]; then
-    echo " Controls: [↑ / ↓] Navigate   [Space] Preview   [Enter] Select   [q] Cancel"
-  else
-    echo " Controls: [↑ / ↓] Navigate   [Enter] Select   [q] Cancel"
-  fi
-  echo ""
-
-  tput civis 2>/dev/null || printf "\033[?25l"
-  stty -echo -icanon 2>/dev/null || true
-
-  local first_render=true
-  render_options() {
-    local sel=$1
-    if [ "$first_render" = false ]; then
-      printf "\033[%dA" "$num_items"
-    fi
-    first_render=false
-
-    for i in "${!items[@]}"; do
-      if [ "$i" -eq "$sel" ]; then
-        printf "\033[2K \033[1;32m ❯ [●] %s\033[0m\n" "${items[$i]}"
-      else
-        printf "\033[2K   [ ] %s\n" "${items[$i]}"
-      fi
-    done
-  }
-
-  while true; do
-    render_options "$current"
-    local char=""
-    local rest=""
-    IFS= read -rsn1 char < "$TTY_DEV" || true
-    if [[ "$char" == $'\033' ]]; then
-      read -rsn2 -t 1 rest < "$TTY_DEV" || true
-      char+="$rest"
-    fi
-
-    case "$char" in
-      $'\033[A'|"k"|"K") # Up
-        stop_preview
-        if [ "$current" -gt 0 ]; then
-          current=$((current - 1))
-        else
-          current=$((num_items - 1))
-        fi
-        ;;
-      $'\033[B'|"j"|"J") # Down
-        stop_preview
-        if [ "$current" -lt $((num_items - 1)) ]; then
-          current=$((current + 1))
-        else
-          current=0
-        fi
-        ;;
-      " ") # Spacebar preview
-        if [ "$is_sound_menu" = true ] && [ "$current" -lt ${#GLOBAL_SOUND_FILES[@]} ]; then
-          play_preview "${GLOBAL_SOUND_FILES[$current]}"
-        fi
-        ;;
-      "") # Enter
-        stop_preview
-        break
-        ;;
-      "q"|"Q")
-        stop_preview
-        tput cnorm 2>/dev/null || printf "\033[?25h"
-        stty echo icanon 2>/dev/null || true
-        echo ""
-        echo "Selection cancelled."
-        return 1
-        ;;
-    esac
-  done
-
-  tput cnorm 2>/dev/null || printf "\033[?25h"
-  stty echo icanon 2>/dev/null || true
-  MENU_SELECTED_INDEX=$current
-  return 0
-}
-
-# -------------------------------------------------------------
-# Interactive Selector Flow
+# Rich Interactive Sound Selector with Search & Category Filter
 # -------------------------------------------------------------
 select_audio_flow() {
   local target_agent="${1:-}"
@@ -316,10 +367,59 @@ select_audio_flow() {
       "🔵 Google Antigravity"
       "🟡 OpenCode"
     )
-    if ! run_menu " 🎯 Choose Target to Configure Sound For:" false "${targets[@]}"; then
-      return 0
-    fi
-    case "$MENU_SELECTED_INDEX" in
+
+    local TTY_DEV="/dev/tty"
+    [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " 🎯 Choose Target to Configure Sound For:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " Controls: [↑ / ↓] Navigate   [Enter] Select   [q] Cancel"
+    echo ""
+
+    local cur=0
+    local first=true
+    tput civis 2>/dev/null || printf "\033[?25l"
+    stty -echo -icanon 2>/dev/null || true
+
+    while true; do
+      if [ "$first" = false ]; then
+        printf "\033[%dA" "${#targets[@]}"
+      fi
+      first=false
+      for i in "${!targets[@]}"; do
+        if [ "$i" -eq "$cur" ]; then
+          printf "\033[2K \033[1;32m ❯ [●] %s\033[0m\n" "${targets[$i]}"
+        else
+          printf "\033[2K   [ ] %s\n" "${targets[$i]}"
+        fi
+      done
+
+      local ch=""
+      local r=""
+      IFS= read -rsn1 ch < "$TTY_DEV" || true
+      if [[ "$ch" == $'\033' ]]; then
+        read -rsn2 -t 1 r < "$TTY_DEV" || true
+        ch+="$r"
+      fi
+
+      case "$ch" in
+        $'\033[A'|"k"|"K") [ "$cur" -gt 0 ] && cur=$((cur - 1)) || cur=$((${#targets[@]} - 1)) ;;
+        $'\033[B'|"j"|"J") [ "$cur" -lt $((${#targets[@]} - 1)) ] && cur=$((cur + 1)) || cur=0 ;;
+        "") break ;;
+        "q"|"Q")
+          tput cnorm 2>/dev/null || printf "\033[?25h"
+          stty echo icanon 2>/dev/null || true
+          return 0
+          ;;
+      esac
+    done
+
+    tput cnorm 2>/dev/null || printf "\033[?25h"
+    stty echo icanon 2>/dev/null || true
+
+    case "$cur" in
       0) target_agent="global" ;;
       1) target_agent="claude" ;;
       2) target_agent="codex" ;;
@@ -327,23 +427,6 @@ select_audio_flow() {
       4) target_agent="opencode" ;;
     esac
   fi
-
-  # Step 2: Dynamically Load Multi-Format Sounds from Global Library
-  shopt -s nullglob nocaseglob
-  GLOBAL_SOUND_FILES=( "$INSTALL_DIR"/sound/*.{mp3,wav,m4a,aac,ogg,flac,aiff} )
-
-  local sound_titles=()
-  local sound_basenames=()
-  for sf in "${GLOBAL_SOUND_FILES[@]}"; do
-    sound_basenames+=("$(basename "$sf")")
-    sound_titles+=("$(basename "$sf" | cut -d. -f1)")
-  done
-
-  # Add dynamic actions to menu
-  local action_add_idx=${#sound_titles[@]}
-  sound_titles+=("➕ [Import / Add Custom Sound (File or URL)...]")
-  local action_open_idx=${#sound_titles[@]}
-  sound_titles+=("📂 [Open Sound Library in Finder]")
 
   local header_label="Global Default"
   case "$target_agent" in
@@ -353,44 +436,223 @@ select_audio_flow() {
     opencode) header_label="OpenCode" ;;
   esac
 
-  if ! run_menu " 🔔 Select Sound Track for: $header_label" true "${sound_titles[@]}"; then
-    return 0
-  fi
+  # Step 2: Interactive Sound List with Category Filter & Search
+  local active_category="all"
+  local search_query=""
 
-  # Handle Action: Import Custom Sound
-  if [ "$MENU_SELECTED_INDEX" -eq "$action_add_idx" ]; then
-    echo ""
-    echo "Enter audio file path or URL (or drag & drop file here):"
-    read -r user_sound_input < /dev/tty
-    if add_sound_file "$user_sound_input"; then
-      chosen_file="$ADDED_SOUND_BASENAME"
-    else
-      return 1
-    fi
-  # Handle Action: Open in Finder
-  elif [ "$MENU_SELECTED_INDEX" -eq "$action_open_idx" ]; then
-    if command -v open >/dev/null 2>&1; then
-      open "$INSTALL_DIR/sound"
-      echo "✓ Opened $INSTALL_DIR/sound in Finder."
-      echo "Drop your audio files there, then run 'alarm --select' again."
-    fi
-    return 0
-  else
-    chosen_file="${sound_basenames[$MENU_SELECTED_INDEX]}"
-  fi
+  local TTY_DEV="/dev/tty"
+  [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
 
-  # Step 3: Link Sound
-  if [ "$target_agent" = "global" ]; then
-    ln -sf "sound/$chosen_file" "$INSTALL_DIR/alarm_sound.mp3"
-    [ "$SCRIPT_DIR" != "$INSTALL_DIR" ] && ln -sf "sound/$chosen_file" "$SCRIPT_DIR/alarm_sound.mp3" 2>/dev/null || true
+  while true; do
+    # Load items using Node helper
+    local JSON_RESULT
+    JSON_RESULT="$(node -e '
+      const fs = require("fs");
+      const path = require("path");
+
+      const soundDir = process.argv[1];
+      const activeCat = process.argv[2].toLowerCase();
+      const query = process.argv[3].toLowerCase();
+
+      let catalog = {};
+      const catPath = path.join(soundDir, "sounds.json");
+      if (fs.existsSync(catPath)) {
+        try { catalog = JSON.parse(fs.readFileSync(catPath, "utf8")); } catch(e){}
+      }
+
+      const files = fs.readdirSync(soundDir).filter(f => /\.(mp3|wav|m4a|aac|ogg|flac|aiff)$/i.test(f));
+      const categories = new Set(["all"]);
+
+      for (const f of files) {
+        if (catalog[f] && catalog[f].category) categories.add(catalog[f].category.toLowerCase());
+      }
+
+      const list = [];
+      for (const f of files) {
+        const meta = catalog[f] || {};
+        const title = meta.title || f.replace(/\.[^.]+$/, "");
+        const cat = (meta.category || "custom").toLowerCase();
+        const desc = meta.description || "";
+        const dur = meta.duration || "";
+        const tags = (meta.tags || []).join(" ");
+        const matchText = `${f} ${title} ${desc} ${cat} ${tags}`.toLowerCase();
+
+        if (activeCat !== "all" && cat !== activeCat) continue;
+        if (query && !matchText.includes(query)) continue;
+
+        let display = title;
+        if (dur) display += ` (${dur})`;
+        if (desc) display += ` — [${desc}]`;
+
+        list.push({ file: f, title, display, category: cat });
+      }
+
+      console.log(JSON.stringify({ list, categories: Array.from(categories) }));
+    ' "$INSTALL_DIR/sound" "$active_category" "$search_query")"
+
+    local ITEM_COUNT
+    ITEM_COUNT="$(node -e 'console.log(JSON.parse(process.argv[1]).list.length)' "$JSON_RESULT")"
+
+    local ALL_CATEGORIES=()
+    while IFS= read -r c; do
+      ALL_CATEGORIES+=("$c")
+    done < <(node -e 'JSON.parse(process.argv[1]).categories.forEach(c => console.log(c))' "$JSON_RESULT")
+
+    local DISPLAY_LIST=()
+    local FILE_LIST=()
+    while IFS= read -r line; do
+      DISPLAY_LIST+=("$line")
+    done < <(node -e 'JSON.parse(process.argv[1]).list.forEach(i => console.log(i.display))' "$JSON_RESULT")
+
+    while IFS= read -r line; do
+      FILE_LIST+=("$line")
+    done < <(node -e 'JSON.parse(process.argv[1]).list.forEach(i => console.log(i.file))' "$JSON_RESULT")
+
+    # Add interactive actions
+    local act_add_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("➕ [Import / Add Custom Sound (File or URL)...]")
+    local act_update_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("🔄 [Update Community Sounds from GitHub]")
+    local act_open_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("📂 [Open Sound Library in Finder]")
+
+    local total_rows=${#DISPLAY_LIST[@]}
+    local current_idx=0
+    local first_draw=true
+
+    tput civis 2>/dev/null || printf "\033[?25l"
+    stty -echo -icanon 2>/dev/null || true
+
     echo ""
-    echo " ✓ Set Global Default sound → $chosen_file"
-  else
-    ln -sf "sound/$chosen_file" "$INSTALL_DIR/alarm_sound_${target_agent}.mp3"
-    [ "$SCRIPT_DIR" != "$INSTALL_DIR" ] && ln -sf "sound/$chosen_file" "$SCRIPT_DIR/alarm_sound_${target_agent}.mp3" 2>/dev/null || true
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " 🔔 Select Alert Sound Track for: $header_label"
+    echo " Filter: [\x1b[36m$active_category\x1b[0m] (press 'c' to cycle) | Search: \"\x1b[33m$search_query\x1b[0m\" (press '/' to filter)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " Controls: [↑ / ↓] Navigate   [Space] ▶ Play/Stop Preview   [Enter] Select   [q] Cancel"
     echo ""
-    echo " ✓ Set $header_label custom sound → $chosen_file"
-  fi
+
+    local need_rerender=false
+    while true; do
+      if [ "$first_draw" = false ]; then
+        printf "\033[%dA" "$total_rows"
+      fi
+      first_draw=false
+
+      for idx in "${!DISPLAY_LIST[@]}"; do
+        local playing_tag=""
+        if [ "$idx" -lt "$ITEM_COUNT" ]; then
+          local cur_f="${FILE_LIST[$idx]}"
+          if [ "$CURRENT_PLAYING_FILE" = "$INSTALL_DIR/sound/$cur_f" ] && [ -n "$PREVIEW_PID" ] && kill -0 "$PREVIEW_PID" 2>/dev/null; then
+            playing_tag=" \033[1;33m▶ Playing...\033[0m"
+          fi
+        fi
+
+        if [ "$idx" -eq "$current_idx" ]; then
+          printf "\033[2K \033[1;32m ❯ [●] %s%s\033[0m\n" "${DISPLAY_LIST[$idx]}" "$playing_tag"
+        else
+          printf "\033[2K   [ ] %s%s\n" "${DISPLAY_LIST[$idx]}" "$playing_tag"
+        fi
+      done
+
+      local key=""
+      local key_rest=""
+      IFS= read -rsn1 key < "$TTY_DEV" || true
+      if [[ "$key" == $'\033' ]]; then
+        read -rsn2 -t 1 key_rest < "$TTY_DEV" || true
+        key+="$key_rest"
+      fi
+
+      case "$key" in
+        $'\033[A'|"k"|"K")
+          [ "$current_idx" -gt 0 ] && current_idx=$((current_idx - 1)) || current_idx=$((total_rows - 1))
+          ;;
+        $'\033[B'|"j"|"J")
+          [ "$current_idx" -lt $((total_rows - 1)) ] && current_idx=$((current_idx + 1)) || current_idx=0
+          ;;
+        " ") # Space (toggle preview)
+          if [ "$current_idx" -lt "$ITEM_COUNT" ]; then
+            play_preview "$INSTALL_DIR/sound/${FILE_LIST[$current_idx]}"
+          fi
+          ;;
+        "c"|"C") # Cycle category
+          stop_preview
+          local cat_idx=0
+          for ci in "${!ALL_CATEGORIES[@]}"; do
+            if [ "${ALL_CATEGORIES[$ci]}" = "$active_category" ]; then
+              cat_idx=$ci
+              break
+            fi
+          done
+          cat_idx=$(( (cat_idx + 1) % ${#ALL_CATEGORIES[@]} ))
+          active_category="${ALL_CATEGORIES[$cat_idx]}"
+          break
+          ;;
+        "/") # Enter Search mode
+          stop_preview
+          tput cnorm 2>/dev/null || printf "\033[?25h"
+          stty echo icanon 2>/dev/null || true
+          echo ""
+          printf "Search (empty to reset): "
+          read -r search_query < "$TTY_DEV"
+          tput civis 2>/dev/null || printf "\033[?25l"
+          stty -echo -icanon 2>/dev/null || true
+          break
+          ;;
+        "") # Enter (Confirm)
+          stop_preview
+          tput cnorm 2>/dev/null || printf "\033[?25h"
+          stty echo icanon 2>/dev/null || true
+
+          # Handle Action: Import Custom Sound
+          if [ "$current_idx" -eq "$act_add_idx" ]; then
+            echo ""
+            echo "Enter audio file path or URL (or drag & drop file here):"
+            read -r user_in < "$TTY_DEV"
+            if add_sound_file "$user_in"; then
+              chosen_file="$ADDED_SOUND_BASENAME"
+            else
+              return 1
+            fi
+          # Handle Action: Update Library
+          elif [ "$current_idx" -eq "$act_update_idx" ]; then
+            update_sound_library
+            active_category="all"
+            search_query=""
+            break
+          # Handle Action: Open Finder
+          elif [ "$current_idx" -eq "$act_open_idx" ]; then
+            open "$INSTALL_DIR/sound" 2>/dev/null || xdg-open "$INSTALL_DIR/sound" 2>/dev/null || true
+            echo "✓ Opened sound library. Drop files here, then re-select."
+            return 0
+          else
+            chosen_file="${FILE_LIST[$current_idx]}"
+          fi
+
+          # Link chosen sound
+          if [ "$target_agent" = "global" ]; then
+            ln -sf "sound/$chosen_file" "$INSTALL_DIR/alarm_sound.mp3"
+            [ "$SCRIPT_DIR" != "$INSTALL_DIR" ] && ln -sf "sound/$chosen_file" "$SCRIPT_DIR/alarm_sound.mp3" 2>/dev/null || true
+            echo ""
+            echo " ✓ Set Global Default sound → $chosen_file"
+          else
+            ln -sf "sound/$chosen_file" "$INSTALL_DIR/alarm_sound_${target_agent}.mp3"
+            [ "$SCRIPT_DIR" != "$INSTALL_DIR" ] && ln -sf "sound/$chosen_file" "$SCRIPT_DIR/alarm_sound_${target_agent}.mp3" 2>/dev/null || true
+            echo ""
+            echo " ✓ Set $header_label custom sound → $chosen_file"
+          fi
+          return 0
+          ;;
+        "q"|"Q")
+          stop_preview
+          tput cnorm 2>/dev/null || printf "\033[?25h"
+          stty echo icanon 2>/dev/null || true
+          echo ""
+          echo "Selection cancelled."
+          return 0
+          ;;
+      esac
+    done
+  done
 }
 
 # If --select-only is passed, run audio selection flow and exit
@@ -407,10 +669,8 @@ echo "╔═══════════════════════�
 echo "║          AI-ALARM UNIVERSAL AGENT HOOKS SETUP             ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 
-# 1. Interactive Sound Selection for Global Default
 select_audio_flow "global"
 
-# 2. Determine global binary install directory
 BIN_DIR=""
 if [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
   BIN_DIR="/opt/homebrew/bin"
@@ -431,7 +691,6 @@ echo "  ✓ Installed: $BIN_DIR/notify"
 
 TARGET_ALARM_BIN="$BIN_DIR/alarm"
 
-# 3. Configure Hooks for All AI Coding Agents
 echo ""
 echo "→ Auto-detecting and configuring AI coding agent hooks..."
 
@@ -521,7 +780,6 @@ if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
     fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
     console.log("  ✓ Antigravity global hook configured: ~/.gemini/config/hooks.json");
 
-    // Mirror to Antigravity CLI, Antigravity 2.0, and Antigravity IDE directories
     const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
     for (const f of flavors) {
       const fDir = path.join(process.env.HOME, ".gemini", f);
@@ -584,5 +842,6 @@ echo "🎉 Setup complete! All AI agents are configured with task completion hoo
 echo "📁 Global sound library: $INSTALL_DIR/sound/"
 echo "💡 Help manual: Run 'alarm --help' or 'alarm -ask'"
 echo "💡 Change sounds: Run 'alarm --select'"
-echo "💡 Add custom sound: Run 'alarm add <file_or_url>' or 'alarm open'"
+echo "💡 Search sounds: Run 'alarm search <query>'"
+echo "💡 Update from GitHub: Run 'alarm update'"
 echo ""
