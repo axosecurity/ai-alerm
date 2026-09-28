@@ -47,19 +47,38 @@ set_config_val() {
 
 send_desktop_notification() {
   local agent_name="${1:-}"
+  local custom_msg="${2:-}"
+  local DESKTOP_NOTIFY="$(get_config_val "desktop_notifications" "true")"
+  local NOTIF_SOUND="$(get_config_val "notification_sound" "false")"
+  local NOTIF_TITLE="$(get_config_val "notification_title" "AI-Alarm")"
+  local WEBHOOK_URL="$(get_config_val "webhook_url" "")"
+
   local agent_title="AI Agent"
   case "$agent_name" in
     claude) agent_title="Claude Code" ;;
     codex) agent_title="OpenAI Codex" ;;
     antigravity) agent_title="Google Antigravity" ;;
     opencode) agent_title="OpenCode" ;;
+    test) agent_title="AI-Alarm Test" ;;
     *) [ -n "$agent_name" ] && agent_title="$agent_name" ;;
   esac
 
-  if [[ "$OSTYPE" == "darwin"* ]] && command -v osascript >/dev/null 2>&1; then
-    (osascript -e "display notification \"Task completed by ${agent_title}!\" with title \"AI-Alarm\" subtitle \"Task Finished\" sound name \"\"" >/dev/null 2>&1 &)
-  elif command -v notify-send >/dev/null 2>&1; then
-    (notify-send "AI-Alarm" "Task completed by ${agent_title}!" --icon=dialog-information >/dev/null 2>&1 &)
+  local msg="${custom_msg:-Task completed by ${agent_title}!}"
+
+  if [ "$DESKTOP_NOTIFY" != "false" ]; then
+    local mac_sound=""
+    [ "$NOTIF_SOUND" = "true" ] && mac_sound="Submarine"
+    if [[ "$OSTYPE" == "darwin"* ]] && command -v osascript >/dev/null 2>&1; then
+      (osascript -e "display notification \"${msg}\" with title \"${NOTIF_TITLE}\" subtitle \"Task Finished\" sound name \"${mac_sound}\"" >/dev/null 2>&1 &)
+    elif command -v notify-send >/dev/null 2>&1; then
+      (notify-send "${NOTIF_TITLE}" "${msg}" --icon=dialog-information >/dev/null 2>&1 &)
+    fi
+  fi
+
+  if [ -n "$WEBHOOK_URL" ]; then
+    (curl -s -X POST -H 'Content-type: application/json' \
+      --data "{\"text\":\"🔔 [${NOTIF_TITLE}] ${msg}\"}" \
+      "$WEBHOOK_URL" >/dev/null 2>&1 &)
   fi
 }
 
@@ -94,7 +113,12 @@ COMMANDS & OPTIONS:
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
     alarm unmute              Restore audio alerts
+    alarm notify              Notification manager dashboard & settings
     alarm notify [on|off]     Toggle native desktop notification banners
+    alarm notify sound [on|off] Toggle system sound inside notification toast
+    alarm notify title <text> Set custom notification banner title
+    alarm notify webhook <url> Configure Slack / Discord incoming webhook alert
+    alarm notify test         Dispatch test notification toast & webhook ping
     alarm --select [agent]    Interactive arrow-key sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
     alarm update              Download latest community sounds from GitHub (sync)
@@ -213,7 +237,7 @@ if [ "${1:-}" = "unmute" ] || [ "${1:-}" = "--unmute" ]; then
   exit 0
 fi
 
-# Desktop notifications
+# Desktop notifications management
 if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--notify" ]; then
   case "${2:-}" in
     on|true|1|enable)
@@ -224,15 +248,80 @@ if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--n
       set_config_val "desktop_notifications" "false"
       echo "🔕 Desktop notification banners disabled."
       ;;
-    *)
-      CUR="$(get_config_val "desktop_notifications" "true")"
-      if [ "$CUR" = "true" ]; then
-        echo "Desktop notification banners: Enabled 🔔"
-        echo "Toggle with: alarm notify off"
+    sound)
+      case "${3:-}" in
+        on|true|1|enable)
+          set_config_val "notification_sound" "true"
+          echo "🔊 Notification toast system sound enabled."
+          ;;
+        off|false|0|disable)
+          set_config_val "notification_sound" "false"
+          echo "🔇 Notification toast system sound disabled (silent toast)."
+          ;;
+        *)
+          CUR_SND="$(get_config_val "notification_sound" "false")"
+          echo "Notification toast sound: $([ "$CUR_SND" = "true" ] && echo 'Enabled 🔊' || echo 'Silent 🔇')"
+          echo "Toggle with: alarm notify sound [on|off]"
+          ;;
+      esac
+      ;;
+    title)
+      if [ -n "${3:-}" ]; then
+        set_config_val "notification_title" "$3"
+        echo "✓ Notification title set to: \"$3\""
       else
-        echo "Desktop notification banners: Disabled 🔕"
-        echo "Toggle with: alarm notify on"
+        echo "Usage: alarm notify title <custom_title>"
       fi
+      ;;
+    webhook)
+      if [ -z "${3:-}" ]; then
+        CUR_HOOK="$(get_config_val "webhook_url" "")"
+        if [ -n "$CUR_HOOK" ]; then
+          echo "Current webhook URL: $CUR_HOOK"
+          echo "To clear: alarm notify webhook clear"
+        else
+          echo "No webhook configured."
+          echo "Usage: alarm notify webhook <url>"
+        fi
+      elif [ "$3" = "clear" ] || [ "$3" = "off" ] || [ "$3" = "disable" ]; then
+        set_config_val "webhook_url" ""
+        echo "✓ Webhook alerts disabled and cleared."
+      else
+        set_config_val "webhook_url" "$3"
+        echo "✓ Webhook URL configured: $3"
+        echo "💡 Test with: alarm notify test"
+      fi
+      ;;
+    test)
+      echo "🚀 Sending test notification..."
+      send_desktop_notification "test" "This is a test notification from AI-Alarm!"
+      echo "✓ Test notification dispatched (desktop toast & webhook if configured)."
+      ;;
+    *)
+      CUR_NOTIF="$(get_config_val "desktop_notifications" "true")"
+      CUR_SND="$(get_config_val "notification_sound" "false")"
+      CUR_TITLE="$(get_config_val "notification_title" "AI-Alarm")"
+      CUR_HOOK="$(get_config_val "webhook_url" "")"
+
+      echo ""
+      echo "╔═══════════════════════════════════════════════════════════════════╗"
+      echo "║               AI-ALARM NOTIFICATION SYSTEM MANAGER                ║"
+      echo "╚═══════════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "  Desktop Banners:    $([ "$CUR_NOTIF" = "true" ] && echo "Enabled 🔔" || echo "Disabled 🔕")"
+      echo "  Banner Chime:       $([ "$CUR_SND" = "true" ] && echo "Enabled 🔊" || echo "Silent 🔇")"
+      echo "  Banner Title:       $CUR_TITLE"
+      echo "  Webhook Alert:      $([ -n "$CUR_HOOK" ] && echo "Configured 🌐 ($CUR_HOOK)" || echo "None ⚪")"
+      echo ""
+      echo "  AVAILABLE COMMANDS:"
+      echo "    alarm notify on               Enable desktop notification banners"
+      echo "    alarm notify off              Disable desktop notification banners"
+      echo "    alarm notify sound on|off     Toggle system chime in notification toasts"
+      echo "    alarm notify title <text>     Customize notification banner title"
+      echo "    alarm notify webhook <url>    Set Slack/Discord incoming webhook URL"
+      echo "    alarm notify webhook clear    Disable webhook alerts"
+      echo "    alarm notify test             Send test notification toast & webhook"
+      echo ""
       ;;
   esac
   exit 0

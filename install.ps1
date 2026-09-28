@@ -47,6 +47,9 @@ function Show-StatusDashboard {
     $vol = 80
     $muted = $false
     $desktopNotif = $true
+    $notifSound = $false
+    $notifTitle = "AI-Alarm"
+    $webhookUrl = ""
 
     if (Test-Path $ConfigFile) {
         try {
@@ -54,6 +57,9 @@ function Show-StatusDashboard {
             if ($null -ne $cfg.volume) { $vol = [int]$cfg.volume }
             if ($null -ne $cfg.muted) { $muted = [bool]$cfg.muted }
             if ($null -ne $cfg.desktop_notifications) { $desktopNotif = [bool]$cfg.desktop_notifications }
+            if ($null -ne $cfg.notification_sound) { $notifSound = [bool]$cfg.notification_sound }
+            if ($null -ne $cfg.notification_title) { $notifTitle = [string]$cfg.notification_title }
+            if ($null -ne $cfg.webhook_url) { $webhookUrl = [string]$cfg.webhook_url }
         } catch {}
     }
 
@@ -92,14 +98,21 @@ function Show-StatusDashboard {
         $codexStatus = if ($raw -match "hooks\.Stop" -and $raw -match "alarm") { "✓ Configured (~/.codex/config.toml)" } else { "○ Not configured" }
     }
 
-    $agyPath = Join-Path $env:USERPROFILE ".gemini\config\hooks.json"
-    $agyStatus = "○ Not installed"
-    if (Test-Path $agyPath) {
-        try {
-            $h = Get-Content $agyPath -Raw | ConvertFrom-Json
-            $agyStatus = if ($h."task-finished-alarm") { "✓ Configured (~/.gemini/config/hooks.json)" } else { "○ Not configured" }
-        } catch { $agyStatus = "○ Error parsing" }
+    function Check-HookFile($pathList) {
+        foreach ($p in $pathList) {
+            if (Test-Path $p) {
+                try {
+                    $h = Get-Content $p -Raw | ConvertFrom-Json
+                    if ($h."task-finished-alarm") { return "✓ Configured ($($p.Replace($env:USERPROFILE, '~')))" }
+                } catch {}
+            }
+        }
+        return "○ Not configured"
     }
+
+    $agyCliStatus  = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\antigravity-cli\hooks.json"), (Join-Path $env:USERPROFILE ".antigravity\hooks.json"))
+    $agyIdeStatus  = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\antigravity-ide\hooks.json"), (Join-Path $env:USERPROFILE ".antigravity-ide\hooks.json"))
+    $geminiCoreStatus = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\config\hooks.json"), (Join-Path $env:USERPROFILE ".gemini\antigravity\hooks.json"))
 
     $opencodePath = Join-Path $env:USERPROFILE ".config\opencode\plugins\task-finished-alarm.ts"
     $opencodeStatus = if (Test-Path $opencodePath) { "✓ Configured (~/.config/opencode/plugins/)" } else { "○ Not installed" }
@@ -114,13 +127,21 @@ function Show-StatusDashboard {
   ───────────────
   🔊 Volume:              $vol%  [$bar]
   🔇 Mute State:          $(if ($muted) { "Muted 🔇 (Silent mode)" } else { "Active 🔊 (Audio enabled)" })
+
+  NOTIFICATION SETTINGS
+  ──────────────────────
   🔔 Desktop Banners:     $(if ($desktopNotif) { "Enabled 🔔 (Windows Toast)" } else { "Disabled 🔕" })
+  🔊 Banner Chime:        $(if ($notifSound) { "Enabled 🔊" } else { "Silent 🔇" })
+  🏷️  Banner Title:        "$notifTitle"
+  🌐 Webhook URL:         $(if ($webhookUrl) { $webhookUrl } else { "None (Slack / Discord)" })
 
   AGENT HOOK INTEGRATIONS
   ───────────────────────
   🟣 Claude Code:         $claudeStatus
   🟢 OpenAI Codex:        $codexStatus
-  🔵 Google Antigravity:  $agyStatus
+  🔵 Antigravity CLI:     $agyCliStatus
+  🔵 Antigravity IDE:     $agyIdeStatus
+  🔵 Gemini Ecosystem:    $geminiCoreStatus
   🟡 OpenCode:            $opencodeStatus
 
   SYSTEM & PATHS
@@ -189,17 +210,30 @@ function Run-Uninstallation {
         } catch {}
     }
 
-    # 3. Google Antigravity
-    $agyPath = Join-Path $env:USERPROFILE ".gemini\config\hooks.json"
-    if (Test-Path $agyPath) {
-        try {
-            $h = Get-Content $agyPath -Raw | ConvertFrom-Json
-            if ($h."task-finished-alarm") {
-                $h.PSObject.Properties.Remove("task-finished-alarm")
-                $h | ConvertTo-Json -Depth 10 | Set-Content $agyPath
-                Write-Host "  ✓ Removed Google Antigravity hook ($agyPath)" -ForegroundColor Green
-            }
-        } catch {}
+    # 3. Google Antigravity & Gemini Ecosystem
+    $agyHookList = @(
+        (Join-Path $env:USERPROFILE ".gemini\config\hooks.json"),
+        (Join-Path $env:USERPROFILE ".gemini\antigravity\hooks.json"),
+        (Join-Path $env:USERPROFILE ".gemini\antigravity-cli\hooks.json"),
+        (Join-Path $env:USERPROFILE ".gemini\antigravity-ide\hooks.json"),
+        (Join-Path $env:USERPROFILE ".antigravity\hooks.json"),
+        (Join-Path $env:USERPROFILE ".antigravity-ide\hooks.json")
+    )
+    $removedAgy = $false
+    foreach ($p in $agyHookList) {
+        if (Test-Path $p) {
+            try {
+                $h = Get-Content $p -Raw | ConvertFrom-Json
+                if ($h."task-finished-alarm") {
+                    $h.PSObject.Properties.Remove("task-finished-alarm")
+                    $h | ConvertTo-Json -Depth 10 | Set-Content $p
+                    $removedAgy = $true
+                }
+            } catch {}
+        }
+    }
+    if ($removedAgy) {
+        Write-Host "  ✓ Removed Antigravity & Gemini hooks across all interfaces" -ForegroundColor Green
     }
 
     # 4. OpenCode
@@ -299,13 +333,16 @@ $SoundDir   = Join-Path $InstallDir "sound"
 $ConfigFile = Join-Path $InstallDir "config.json"
 
 function Get-AlarmConfig {
-    $cfg = @{ volume = 80; muted = $false; desktop_notifications = $true }
+    $cfg = @{ volume = 80; muted = $false; desktop_notifications = $true; notification_sound = $false; notification_title = "AI-Alarm"; webhook_url = "" }
     if (Test-Path $ConfigFile) {
         try {
             $json = Get-Content $ConfigFile -Raw | ConvertFrom-Json
             if ($null -ne $json.volume) { $cfg.volume = [int]$json.volume }
             if ($null -ne $json.muted) { $cfg.muted = [bool]$json.muted }
             if ($null -ne $json.desktop_notifications) { $cfg.desktop_notifications = [bool]$json.desktop_notifications }
+            if ($null -ne $json.notification_sound) { $cfg.notification_sound = [bool]$json.notification_sound }
+            if ($null -ne $json.notification_title) { $cfg.notification_title = [string]$json.notification_title }
+            if ($null -ne $json.webhook_url) { $cfg.webhook_url = [string]$json.webhook_url }
         } catch {}
     }
     return $cfg
@@ -315,16 +352,40 @@ function Save-AlarmConfig($cfg) {
     $cfg | ConvertTo-Json | Set-Content $ConfigFile
 }
 
-function Send-Toast($agent) {
+function Send-Toast($agent, $msgText) {
     $cfg = Get-AlarmConfig
-    if (-not $cfg.desktop_notifications) { return }
-    $title = if ($agent) { "Task completed by $agent!" } else { "Task completed!" }
+    $title = if ($cfg.notification_title) { $cfg.notification_title } else { "AI-Alarm" }
+    $body = if ($msgText) { $msgText } elseif ($agent) { "Task completed by $agent!" } else { "Task completed!" }
+
+    if ($cfg.webhook_url) {
+        try {
+            $payload = @{
+                text = "🔔 $title: $body"
+                agent = $agent
+                timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            } | ConvertTo-Json
+            Start-Job -ScriptBlock {
+                param($url, $p)
+                Invoke-RestMethod -Uri $url -Method Post -Body $p -ContentType "application/json" -TimeoutSec 5
+            } -ArgumentList $cfg.webhook_url, $payload | Out-Null
+        } catch {}
+    }
+
+    if ($cfg.desktop_notifications -eq $false) { return }
+
     try {
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
         $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
         $xml = [xml]$template.GetXml()
-        $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("AI-Alarm")) > $null
-        $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode($title)) > $null
+        $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode($title)) > $null
+        $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode($body)) > $null
+
+        if (-not $cfg.notification_sound) {
+            $audioElem = $xml.CreateElement("audio")
+            $audioElem.SetAttribute("silent", "true")
+            $xml.DocumentElement.AppendChild($audioElem) > $null
+        }
+
         $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $toastXml.LoadXml($xml.OuterXml)
         $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
@@ -366,14 +427,80 @@ if ($Command -in @("unmute", "--unmute")) {
 # Notify command
 if ($Command -in @("notify", "notification", "--notify")) {
     $cfg = Get-AlarmConfig
-    if ($Arg1 -in @("off", "disable", "false", "0")) {
-        $cfg.desktop_notifications = $false
-        Save-AlarmConfig $cfg
-        Write-Host "🔕 Desktop notification toasts disabled." -ForegroundColor Yellow
-    } else {
+    $sub = ($Arg1 + "").ToLower()
+    if ($sub -in @("on", "true", "1", "enable")) {
         $cfg.desktop_notifications = $true
         Save-AlarmConfig $cfg
-        Write-Host "🔔 Desktop notification toasts enabled." -ForegroundColor Green
+        Write-Host "🔔 Desktop notification banners enabled." -ForegroundColor Green
+    } elseif ($sub -in @("off", "false", "0", "disable")) {
+        $cfg.desktop_notifications = $false
+        Save-AlarmConfig $cfg
+        Write-Host "🔕 Desktop notification banners disabled." -ForegroundColor Yellow
+    } elseif ($sub -eq "sound") {
+        $soundOpt = ($Arg2 + "").ToLower()
+        if ($soundOpt -in @("on", "true", "1", "enable")) {
+            $cfg.notification_sound = $true
+            Save-AlarmConfig $cfg
+            Write-Host "🔊 Notification toast system sound enabled." -ForegroundColor Green
+        } elseif ($soundOpt -in @("off", "false", "0", "disable")) {
+            $cfg.notification_sound = $false
+            Save-AlarmConfig $cfg
+            Write-Host "🔇 Notification toast system sound disabled (silent toast)." -ForegroundColor Yellow
+        } else {
+            Write-Host "Notification toast sound: $(if ($cfg.notification_sound) { 'Enabled 🔊' } else { 'Silent 🔇' })"
+            Write-Host "Toggle with: alarm notify sound [on|off]"
+        }
+    } elseif ($sub -eq "title") {
+        if ($Arg2) {
+            $cfg.notification_title = $Arg2
+            Save-AlarmConfig $cfg
+            Write-Host "✓ Notification title set to: `"$($cfg.notification_title)`"" -ForegroundColor Green
+        } else {
+            Write-Host "Usage: alarm notify title <custom_title>"
+        }
+    } elseif ($sub -eq "webhook") {
+        if (-not $Arg2) {
+            if ($cfg.webhook_url) {
+                Write-Host "Current webhook URL: $($cfg.webhook_url)"
+                Write-Host "To clear: alarm notify webhook clear"
+            } else {
+                Write-Host "No webhook configured."
+                Write-Host "Usage: alarm notify webhook <url>"
+            }
+        } elseif ($Arg2 -in @("clear", "off", "disable")) {
+            $cfg.webhook_url = ""
+            Save-AlarmConfig $cfg
+            Write-Host "✓ Webhook alerts disabled and cleared." -ForegroundColor Green
+        } else {
+            $cfg.webhook_url = $Arg2
+            Save-AlarmConfig $cfg
+            Write-Host "✓ Webhook URL configured: $($cfg.webhook_url)" -ForegroundColor Green
+            Write-Host "💡 Test with: alarm notify test"
+        }
+    } elseif ($sub -eq "test") {
+        Write-Host "🚀 Sending test notification..." -ForegroundColor Cyan
+        Send-Toast "test" "This is a test notification from AI-Alarm!"
+        Write-Host "✓ Test notification dispatched (desktop toast & webhook if configured)." -ForegroundColor Green
+    } else {
+        Write-Host @"
+╔═══════════════════════════════════════════════════════════════════╗
+║               AI-ALARM NOTIFICATION SYSTEM MANAGER                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  Desktop Banners:    $(if ($cfg.desktop_notifications -ne $false) { 'Enabled 🔔' } else { 'Disabled 🔕' })
+  Banner Chime:       $(if ($cfg.notification_sound) { 'Enabled 🔊' } else { 'Silent 🔇' })
+  Banner Title:       $(if ($cfg.notification_title) { $cfg.notification_title } else { 'AI-Alarm' })
+  Webhook Alert:      $(if ($cfg.webhook_url) { "Configured 🌐 ($($cfg.webhook_url))" } else { 'None ⚪' })
+
+  AVAILABLE COMMANDS:
+    alarm notify on               Enable desktop notification banners
+    alarm notify off              Disable desktop notification banners
+    alarm notify sound on|off     Toggle system chime in notification toasts
+    alarm notify title <text>     Customize notification banner title
+    alarm notify webhook <url>    Set Slack/Discord incoming webhook URL
+    alarm notify webhook clear    Disable webhook alerts
+    alarm notify test             Send test notification toast & webhook
+"@
     }
     exit 0
 }
@@ -405,6 +532,92 @@ COMMANDS & OPTIONS:
     alarm open                Open the sound library directory in File Manager
     alarm remove <name>       Remove a sound file from local disk (rm, delete)
     alarm --help | -help      Show this documentation manual (-h, --ask, -ask)
+"@
+    exit 0
+}
+
+# Status command
+if ($Command -in @("status", "-s", "--status")) {
+    $cfg = Get-AlarmConfig
+    $vol = $cfg.volume
+    $barFilled = [Math]::Min(10, [Math]::Max(0, [Math]::Round(($vol + 5) / 10)))
+    $bar = ("█" * $barFilled) + ("░" * (10 - $barFilled))
+    $soundCount = (Get-ChildItem -Path $SoundDir -File -Include *.mp3,*.wav,*.m4a,*.aac,*.ogg,*.flac,*.aiff -ErrorAction SilentlyContinue | Measure-Object).Count
+
+    function Check-HookFile($pathList) {
+        foreach ($p in $pathList) {
+            if (Test-Path $p) {
+                try {
+                    $h = Get-Content $p -Raw | ConvertFrom-Json
+                    if ($h."task-finished-alarm") { return "✓ Configured ($($p.Replace($env:USERPROFILE, '~')))" }
+                } catch {}
+            }
+        }
+        return "○ Not configured"
+    }
+
+    $claudePath = Join-Path $env:USERPROFILE ".claude\settings.json"
+    $claudeStatus = "○ Not installed"
+    if (Test-Path $claudePath) {
+        try {
+            $c = Get-Content $claudePath -Raw | ConvertFrom-Json
+            $has = $false
+            if ($c.hooks -and $c.hooks.Stop) {
+                foreach ($item in $c.hooks.Stop) {
+                    if ($item.hooks) {
+                        foreach ($h in $item.hooks) { if ($h.command -match "alarm") { $has = $true } }
+                    }
+                }
+            }
+            $claudeStatus = if ($has) { "✓ Configured (~/.claude/settings.json)" } else { "○ Not configured" }
+        } catch { $claudeStatus = "○ Error parsing" }
+    }
+
+    $codexPath = Join-Path $env:USERPROFILE ".codex\config.toml"
+    $codexStatus = "○ Not installed"
+    if (Test-Path $codexPath) {
+        $raw = Get-Content $codexPath -Raw
+        $codexStatus = if ($raw -match "hooks\.Stop" -and $raw -match "alarm") { "✓ Configured (~/.codex/config.toml)" } else { "○ Not configured" }
+    }
+
+    $agyCliStatus  = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\antigravity-cli\hooks.json"), (Join-Path $env:USERPROFILE ".antigravity\hooks.json"))
+    $agyIdeStatus  = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\antigravity-ide\hooks.json"), (Join-Path $env:USERPROFILE ".antigravity-ide\hooks.json"))
+    $geminiCoreStatus = Check-HookFile @((Join-Path $env:USERPROFILE ".gemini\config\hooks.json"), (Join-Path $env:USERPROFILE ".gemini\antigravity\hooks.json"))
+
+    $opencodePath = Join-Path $env:USERPROFILE ".config\opencode\plugins\task-finished-alarm.ts"
+    $opencodeStatus = if (Test-Path $opencodePath) { "✓ Configured (~/.config/opencode/plugins/)" } else { "○ Not installed" }
+
+    Write-Host @"
+
+╔═══════════════════════════════════════════════════════════════════╗
+║                 AI-ALARM STATUS & CONFIGURATION                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  AUDIO SETTINGS
+  ───────────────
+  🔊 Volume:              $vol%  [$bar]
+  🔇 Mute State:          $(if ($cfg.muted) { "Muted 🔇 (Silent mode)" } else { "Active 🔊 (Audio enabled)" })
+
+  NOTIFICATION SETTINGS
+  ──────────────────────
+  🔔 Desktop Banners:     $(if ($cfg.desktop_notifications -ne $false) { "Enabled 🔔 (Windows Toast)" } else { "Disabled 🔕" })
+  🔊 Banner Chime:        $(if ($cfg.notification_sound) { "Enabled 🔊" } else { "Silent 🔇" })
+  🏷️  Banner Title:        "$($cfg.notification_title)"
+  🌐 Webhook URL:         $(if ($cfg.webhook_url) { $cfg.webhook_url } else { "None (Slack / Discord)" })
+
+  AGENT HOOK INTEGRATIONS
+  ───────────────────────
+  🟣 Claude Code:         $claudeStatus
+  🟢 OpenAI Codex:        $codexStatus
+  🔵 Antigravity CLI:     $agyCliStatus
+  🔵 Antigravity IDE:     $agyIdeStatus
+  🔵 Gemini Ecosystem:    $geminiCoreStatus
+  🟡 OpenCode:            $opencodeStatus
+
+  SYSTEM & PATHS
+  ──────────────
+  📁 Sound Library:       $SoundDir ($soundCount tracks)
+  ⚙️  Config File:         $ConfigFile
 "@
     exit 0
 }
@@ -594,11 +807,19 @@ Send-Toast $Command
 
 if ($cfg.muted) { exit 0 }
 
-# Find audio file
+# Find audio file (agent-specific -> global default -> first file in sound dir)
 $audioFile = $null
-$files = Get-ChildItem -Path $SoundDir -File -Include *.mp3,*.wav,*.m4a,*.aac,*.ogg,*.flac,*.aiff -ErrorAction SilentlyContinue
-if ($files -and $files.Count -gt 0) {
-    $audioFile = $files[0].FullName
+if ($Command) {
+    $agentSound = Join-Path $InstallDir "alarm_sound_$Command.mp3"
+    if (Test-Path $agentSound) { $audioFile = $agentSound }
+}
+if (-not $audioFile) {
+    $defSound = Join-Path $InstallDir "alarm_sound.mp3"
+    if (Test-Path $defSound) { $audioFile = $defSound }
+}
+if (-not $audioFile) {
+    $files = Get-ChildItem -Path $SoundDir -File -Include *.mp3,*.wav,*.m4a,*.aac,*.ogg,*.flac,*.aiff -ErrorAction SilentlyContinue
+    if ($files -and $files.Count -gt 0) { $audioFile = $files[0].FullName }
 }
 
 if ($audioFile) {
@@ -689,25 +910,57 @@ matcher = "always"
     }
 }
 
-# 3. Google Antigravity
-$geminiConfigDir = Join-Path $env:USERPROFILE ".gemini\config"
-if (Test-Path $geminiConfigDir) {
-    $agyHooks = Join-Path $geminiConfigDir "hooks.json"
-    $hooks = @{}
-    if (Test-Path $agyHooks) {
-        try { $hooks = Get-Content $agyHooks -Raw | ConvertFrom-Json } catch {}
-    }
-    $hooks."task-finished-alarm" = @{
-        Stop = @(
-            @{
-                type = "command"
-                command = "alarm antigravity"
-                timeout = 15
+# 3. Google Antigravity & Gemini Ecosystem (CLI, IDE, Gemini Core)
+$hasAgy = (Test-Path (Join-Path $env:USERPROFILE ".gemini")) -or `
+          (Test-Path (Join-Path $env:USERPROFILE ".antigravity")) -or `
+          (Test-Path (Join-Path $env:USERPROFILE ".antigravity-ide")) -or `
+          (Get-Command agy -ErrorAction SilentlyContinue)
+
+if ($hasAgy) {
+    $geminiConfigDir = Join-Path $env:USERPROFILE ".gemini\config"
+    if (-not (Test-Path $geminiConfigDir)) { New-Item -ItemType Directory -Path $geminiConfigDir -Force | Out-Null }
+    
+    function Set-AgyHookFile($targetPath) {
+        try {
+            $dir = Split-Path -Parent $targetPath
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $hooks = @{}
+            if (Test-Path $targetPath) {
+                try { $hooks = Get-Content $targetPath -Raw | ConvertFrom-Json } catch {}
             }
-        )
+            $hooks."task-finished-alarm" = @{
+                Stop = @(
+                    @{
+                        type = "command"
+                        command = "alarm antigravity"
+                        timeout = 15
+                    }
+                )
+            }
+            $hooks | ConvertTo-Json -Depth 10 | Set-Content $targetPath
+            return $true
+        } catch { return $false }
     }
-    $hooks | ConvertTo-Json -Depth 10 | Set-Content $agyHooks
-    Write-Host "  ✓ Antigravity hook configured ($agyHooks)" -ForegroundColor Green
+
+    Set-AgyHookFile (Join-Path $geminiConfigDir "hooks.json") | Out-Null
+    Write-Host "  ✓ Antigravity global hook configured (~/.gemini/config/hooks.json)" -ForegroundColor Green
+
+    $flavors = @("antigravity", "antigravity-cli", "antigravity-ide")
+    foreach ($f in $flavors) {
+        $fDir = Join-Path $env:USERPROFILE ".gemini\$f"
+        if (Test-Path $fDir) {
+            Set-AgyHookFile (Join-Path $fDir "hooks.json") | Out-Null
+        }
+    }
+
+    $standalones = @((Join-Path $env:USERPROFILE ".antigravity"), (Join-Path $env:USERPROFILE ".antigravity-ide"))
+    foreach ($s in $standalones) {
+        if (Test-Path $s) {
+            $sHook = Join-Path $s "hooks.json"
+            Set-AgyHookFile $sHook | Out-Null
+            Write-Host "  ✓ Antigravity standalone hook configured ($($sHook.Replace($env:USERPROFILE, '~')))" -ForegroundColor Green
+        }
+    }
 }
 
 Write-Host ""

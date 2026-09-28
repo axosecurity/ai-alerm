@@ -34,7 +34,11 @@ Every supported coding agent was subjected to automated and manual hook lifecycl
 ### 1. Google Antigravity (CLI, Antigravity 2.0, & Antigravity IDE)
 * **Contract:** Implements the Antigravity `Stop` protojson contract.
 * **Verification:** Confirmed that `alarm antigravity` returns `{}` on `stdout` within 50ms while playing audio asynchronously through macOS CoreAudio.
-* **Compatibility:** Automatically mounts across CLI (`agy`), 2.0 (`~/.gemini/antigravity`), IDE (`~/.gemini/antigravity-ide`), and workspace `.agents/hooks.json`.
+* **Compatibility:** Automatically detects and configures all 3 user home interfaces:
+  - Antigravity CLI (`~/.gemini/antigravity-cli/hooks.json` & `~/.antigravity/hooks.json`)
+  - Antigravity IDE (`~/.gemini/antigravity-ide/hooks.json` & `~/.antigravity-ide/hooks.json`)
+  - Gemini Core (`~/.gemini/config/hooks.json` & `~/.gemini/antigravity/hooks.json`)
+  - Project Workspace (`.agents/hooks.json`)
 
 ### 2. Claude Code
 * **Contract:** Integrates via `~/.claude/settings.json` under `hooks.Stop`.
@@ -57,17 +61,23 @@ Every supported coding agent was subjected to automated and manual hook lifecycl
 1. **Interactive Terminal UI (TUI):**
    * Arrow-key navigation (`↑`/`↓`), real-time category filtering (`c`), and keyword search (`/`).
    * Live audio preview on demand (`[Space]` toggle with `▶ Playing...` indicator).
+   * Direct shortcut to interactive Notification System manager.
 
 2. **Volume & Mute Control:**
    * Software volume scaling (`alarm volume <0-100>`) with an ASCII progress meter (`[██████░░░░]`).
    * Instant silent mode (`alarm mute` & `alarm unmute`) with settings persisted in `~/.ai-alarm/config.json`.
 
-3. **Native Desktop Notification Banners:**
+3. **Comprehensive Notification System & Webhook Manager:**
    * Automatically dispatches OS-level notification toasts (`osascript` on macOS, `notify-send` on Linux, WinRT on Windows) concurrently with audio alerts.
-   * Controllable via `alarm notify [on|off]`.
+   * Full granular controls:
+     - `alarm notify [on|off]`: Toggle desktop notification banners.
+     - `alarm notify sound [on|off]`: Toggle system chime inside notification toasts.
+     - `alarm notify title <text>`: Custom notification banner title.
+     - `alarm notify webhook <url|clear>`: Forward alerts to Slack/Discord incoming webhook URLs in non-blocking background jobs.
+     - `alarm notify test`: Immediate diagnostic notification dispatch.
 
 4. **Configuration Status Dashboard:**
-   * Real-time diagnostics dashboard (`alarm status`) summarizing audio settings, assigned tracks per agent, and hook health for all AI tools.
+   * Real-time diagnostics dashboard (`alarm status`) summarizing audio settings, notification parameters, assigned tracks per agent, and hook health across all AI tools.
 
 5. **Dynamic Sound Management:**
    * Global persistent library at `~/.ai-alarm/sound/`.

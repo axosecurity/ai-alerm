@@ -71,9 +71,14 @@ The installer auto-detects installed coding agents and registers non-blocking co
 |---|---|---|---|
 | **Claude Code** | `~/.claude/settings.json` | `hooks.Stop` | `alarm claude` |
 | **OpenAI Codex** | `~/.codex/config.toml` | `[[hooks.Stop]]` | `alarm codex` |
-| **Google Antigravity** | `~/.gemini/config/hooks.json` | `task-finished-alarm.Stop` | `alarm antigravity` |
+| **Antigravity CLI** | `~/.gemini/antigravity-cli/hooks.json` & `~/.antigravity/hooks.json` | `task-finished-alarm.Stop` | `alarm antigravity` |
+| **Antigravity IDE** | `~/.gemini/antigravity-ide/hooks.json` & `~/.antigravity-ide/hooks.json` | `task-finished-alarm.Stop` | `alarm antigravity` |
+| **Gemini Ecosystem** | `~/.gemini/config/hooks.json` & `~/.gemini/antigravity/hooks.json` | `task-finished-alarm.Stop` | `alarm antigravity` |
 | **OpenCode** | `~/.config/opencode/plugins/task-finished-alarm.ts` | `session.idle` | `alarm opencode` |
 | **Workspace** | `.agents/hooks.json` | `task-finished-alarm.Stop` | `alarm` |
+
+> [!TIP]
+> **Complete Antigravity Ecosystem Support:** AI-Alarm configures hooks across all 3 user home interfaces: `~/.gemini/`, `~/.antigravity/`, and `~/.antigravity-ide/`. Whether you run Antigravity via CLI (`agy`), IDE extension, or Gemini core, task completion alerts trigger reliably.
 
 ### How Sound Resolution Works:
 ```text
@@ -160,9 +165,9 @@ alarm remove custom-sound.mp3
 
 ---
 
-## 🎛️ Volume, Mute & Notification Banners
+## 🔔 Notification System & Webhook Manager
 
-Fine-tune your audio levels, mute during meetings, or toggle desktop banners:
+Fine-tune your audio levels, mute during meetings, configure desktop toasts, customize notification titles, or forward alerts to Slack and Discord webhooks:
 
 ```bash
 # Volume Control (0 - 100%)
@@ -173,17 +178,26 @@ alarm volume           # View active volume and progress meter
 alarm mute             # Silence audio (desktop notification toasts still fire)
 alarm unmute           # Restore audio alert playback
 
-# Desktop Notification Toasts (macOS / Linux / Windows)
+# Desktop Notification Banners & Webhooks
+alarm notify           # Open notification status dashboard
 alarm notify on        # Enable native desktop notification banners
 alarm notify off       # Disable desktop toasts
-alarm notify           # Check desktop notification status
+alarm notify sound on  # Enable system chime inside toast banner
+alarm notify sound off # Keep toast banner silent (only audio track plays)
+alarm notify title "🚀 Build Finished"  # Set custom notification title
+alarm notify webhook https://discord.com/api/webhooks/...  # Forward alerts to webhook
+alarm notify webhook clear              # Disable webhook integration
+alarm notify test      # Dispatch test notification toast & webhook immediately
 ```
+
+> [!NOTE]
+> You can also manage all notification settings interactively by running `alarm --select` and choosing **`🔔 [Manage Notification System & Webhook Alerts...]`**.
 
 ---
 
 ## 📊 Status & Configuration Dashboard
 
-Inspect all volume settings, assigned tracks, and hook statuses across all installed agents:
+Inspect all audio volumes, notification settings, assigned tracks, and hook statuses across all installed agents:
 
 ```bash
 alarm status
@@ -200,7 +214,13 @@ alarm info
   ───────────────
   🔊 Volume:              80%  [████████░░]
   🔇 Mute State:          Active 🔊 (Audio enabled)
-  🔔 Desktop Banners:     Enabled 🔔 (Native notification toasts)
+
+  NOTIFICATION SETTINGS
+  ──────────────────────
+  🔔 Desktop Banners:     Enabled 🔔
+  🔊 Banner Chime:        Silent 🔇
+  🏷️  Banner Title:        "AI-Alarm"
+  🌐 Webhook URL:         None (Slack / Discord)
 
   ASSIGNED SOUNDS
   ───────────────
@@ -214,7 +234,9 @@ alarm info
   ───────────────────────
   🟣 Claude Code:         ✓ Configured (~/.claude/settings.json)
   🟢 OpenAI Codex:        ✓ Configured (~/.codex/config.toml)
-  🔵 Google Antigravity:  ✓ Configured (~/.gemini/config/hooks.json)
+  🔵 Antigravity CLI:     ✓ Configured (~/.gemini/antigravity-cli/hooks.json)
+  🔵 Antigravity IDE:     ✓ Configured (~/.gemini/antigravity-ide/hooks.json)
+  🔵 Gemini Ecosystem:    ✓ Configured (~/.gemini/config/hooks.json)
   🟡 OpenCode:            ✓ Configured (~/.config/opencode/plugins/)
   📂 Project Workspace:   ○ None
 
@@ -311,7 +333,11 @@ alarm uninstall
 | `alarm mute` | Silences audio alerts while retaining desktop toasts. |
 | `alarm unmute` | Restores audio alert playback. |
 | `alarm notify [on\|off]` | Enables or disables native desktop notification banners. |
-| `alarm --select` / `-s` | Launches the interactive TUI audio selector (stream, download, delete). |
+| `alarm notify sound [on\|off]` | Toggles system chime sound inside desktop toast notifications. |
+| `alarm notify title <text>` | Customizes notification banner title (e.g. "Task Done"). |
+| `alarm notify webhook <url\|clear>` | Sets or clears incoming webhook URL (Slack / Discord). |
+| `alarm notify test` | Sends an immediate test desktop toast and webhook alert. |
+| `alarm --select` / `-s` | Launches the interactive TUI audio selector (stream, download, delete, configure notifications). |
 | `alarm search <query>` | Searches sounds by title, description, or tag. |
 | `alarm update` / `sync` | Downloads latest community catalog from GitHub. |
 | `alarm set <sound> [agent]` | Directly sets sound for an agent (downloads on demand if cloud-only). |

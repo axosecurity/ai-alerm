@@ -79,8 +79,12 @@ COMMANDS & OPTIONS:
     alarm restore             Download all community sounds for offline use (download-all)
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
-    alarm unmute              Restore audio alerts
+    alarm notify              Notification manager dashboard & settings
     alarm notify [on|off]     Toggle native desktop notification banners
+    alarm notify sound [on|off] Toggle system sound inside notification toast
+    alarm notify title <text> Set custom notification banner title
+    alarm notify webhook <url> Configure Slack / Discord incoming webhook alert
+    alarm notify test         Dispatch test notification toast & webhook ping
     alarm --select [agent]    Interactive sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
     alarm update              Download latest community catalog from GitHub (sync)
@@ -107,7 +111,7 @@ EXAMPLES:
 }
 
 // Desktop Notification Dispatcher
-function sendDesktopNotification(agent) {
+function sendDesktopNotification(agent, customMsg) {
   const cfg = loadConfig();
   if (cfg.desktop_notifications === false) return;
 
@@ -115,13 +119,16 @@ function sendDesktopNotification(agent) {
     claude: 'Claude Code',
     codex: 'OpenAI Codex',
     antigravity: 'Google Antigravity',
-    opencode: 'OpenCode'
+    opencode: 'OpenCode',
+    test: 'AI-Alarm Test'
   };
   const title = agentTitles[agent] || 'AI Agent';
-  const msg = `Task completed by ${title}!`;
+  const notifTitle = cfg.notification_title || 'AI-Alarm';
+  const msg = customMsg || `Task completed by ${title}!`;
 
   if (process.platform === 'darwin') {
-    spawn('osascript', ['-e', `display notification "${msg}" with title "AI-Alarm" subtitle "Task Finished" sound name ""`], {
+    const soundName = cfg.notification_sound ? 'Submarine' : '';
+    spawn('osascript', ['-e', `display notification "${msg.replace(/"/g, '\\"')}" with title "${notifTitle.replace(/"/g, '\\"')}" subtitle "Task Finished" sound name "${soundName}"`], {
       detached: true,
       stdio: 'ignore'
     }).unref();
@@ -131,12 +138,12 @@ function sendDesktopNotification(agent) {
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
         $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
         $xml = [xml]$template.GetXml()
-        $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("AI-Alarm")) > $null
-        $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("${msg}")) > $null
+        $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("${notifTitle.replace(/"/g, '`"')}")) > $null
+        $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("${msg.replace(/"/g, '`"')}")) > $null
         $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $toastXml.LoadXml($xml.OuterXml)
         $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("AI-Alarm").Show($toast)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("${notifTitle.replace(/"/g, '`"')}").Show($toast)
       } catch {}
     `;
     spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
@@ -145,10 +152,32 @@ function sendDesktopNotification(agent) {
     }).unref();
   } else {
     // Linux / BSD
-    spawn('notify-send', ['AI-Alarm', msg, '--icon=dialog-information'], {
+    spawn('notify-send', [notifTitle, msg, '--icon=dialog-information'], {
       detached: true,
       stdio: 'ignore'
     }).unref();
+  }
+
+  // Webhook notification (Slack / Discord / Custom incoming webhook)
+  if (cfg.webhook_url && /^https?:\/\//i.test(cfg.webhook_url)) {
+    try {
+      const payload = JSON.stringify({ text: `🔔 [${notifTitle}] ${msg}` });
+      const parsed = new URL(cfg.webhook_url);
+      const reqLib = parsed.protocol === 'https:' ? https : http;
+      const req = reqLib.request({
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload)
+        }
+      });
+      req.on('error', () => {});
+      req.write(payload);
+      req.end();
+    } catch(e){}
   }
 }
 
@@ -331,16 +360,47 @@ function showStatus() {
       : '\x1b[33m○ Not configured\x1b[0m';
   }
 
-  const agyPath = path.join(homeDir, '.gemini', 'config', 'hooks.json');
-  let agyStatus = '\x1b[31m○ Not installed\x1b[0m';
-  if (fs.existsSync(agyPath)) {
-    try {
-      const h = JSON.parse(fs.readFileSync(agyPath, 'utf8'));
-      agyStatus = h['task-finished-alarm']
-        ? '\x1b[1;32m✓ Configured\x1b[0m (~/.gemini/config/hooks.json)'
-        : '\x1b[33m○ Not configured\x1b[0m';
-    } catch (e) { agyStatus = '\x1b[33m○ Error parsing\x1b[0m'; }
+  // Antigravity & Gemini status checks across all 3 interfaces
+  const agyCliPaths = [
+    path.join(homeDir, '.gemini', 'antigravity-cli', 'hooks.json'),
+    path.join(homeDir, '.antigravity', 'hooks.json')
+  ];
+  const agyIdePaths = [
+    path.join(homeDir, '.gemini', 'antigravity-ide', 'hooks.json'),
+    path.join(homeDir, '.antigravity-ide', 'hooks.json')
+  ];
+  const geminiCorePaths = [
+    path.join(homeDir, '.gemini', 'config', 'hooks.json'),
+    path.join(homeDir, '.gemini', 'antigravity', 'hooks.json')
+  ];
+
+  function checkHookList(paths) {
+    for (const p of paths) {
+      if (fs.existsSync(p)) {
+        try {
+          const h = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (h['task-finished-alarm']) return { configured: true, path: p };
+        } catch (e) {}
+      }
+    }
+    return { configured: false };
   }
+
+  const cliCheck = checkHookList(agyCliPaths);
+  const ideCheck = checkHookList(agyIdePaths);
+  const coreCheck = checkHookList(geminiCorePaths);
+
+  const agyCliStatus = cliCheck.configured
+    ? `\x1b[1;32m✓ Configured\x1b[0m (${cliCheck.path.replace(homeDir, '~')})`
+    : '\x1b[33m○ Not configured\x1b[0m';
+
+  const agyIdeStatus = ideCheck.configured
+    ? `\x1b[1;32m✓ Configured\x1b[0m (${ideCheck.path.replace(homeDir, '~')})`
+    : '\x1b[33m○ Not configured\x1b[0m';
+
+  const geminiCoreStatus = coreCheck.configured
+    ? `\x1b[1;32m✓ Configured\x1b[0m (${coreCheck.path.replace(homeDir, '~')})`
+    : '\x1b[33m○ Not configured\x1b[0m';
 
   const opencodePath = path.join(homeDir, '.config', 'opencode', 'plugins', 'task-finished-alarm.ts');
   const opencodeStatus = fs.existsSync(opencodePath)
@@ -365,7 +425,13 @@ function showStatus() {
   ───────────────
   🔊 Volume:              \x1b[1;33m${vol}%\x1b[0m  [\x1b[32m${bar}\x1b[0m]
   🔇 Mute State:          ${cfg.muted ? '\x1b[1;31mMuted 🔇 (Silent mode)\x1b[0m' : '\x1b[1;32mActive 🔊 (Audio enabled)\x1b[0m'}
-  🔔 Desktop Banners:     ${cfg.desktop_notifications !== false ? '\x1b[1;32mEnabled 🔔 (Native notification toasts)\x1b[0m' : '\x1b[33mDisabled 🔕\x1b[0m'}
+
+  \x1b[1mNOTIFICATION SETTINGS\x1b[0m
+  ──────────────────────
+  🔔 Desktop Banners:     ${cfg.desktop_notifications !== false ? '\x1b[1;32mEnabled 🔔\x1b[0m' : '\x1b[33mDisabled 🔕\x1b[0m'}
+  🔊 Banner Chime:        ${cfg.notification_sound ? '\x1b[1;32mEnabled 🔊\x1b[0m' : '\x1b[2mSilent 🔇\x1b[0m'}
+  🏷️  Banner Title:        "${cfg.notification_title || 'AI-Alarm'}"
+  🌐 Webhook URL:         ${cfg.webhook_url ? `\x1b[1;36m${cfg.webhook_url}\x1b[0m` : '\x1b[2mNone (Slack / Discord)\x1b[0m'}
 
   \x1b[1mASSIGNED SOUNDS\x1b[0m
   ───────────────
@@ -379,7 +445,9 @@ function showStatus() {
   ───────────────────────
   🟣 Claude Code:         ${claudeStatus}
   🟢 OpenAI Codex:        ${codexStatus}
-  🔵 Google Antigravity:  ${agyStatus}
+  🔵 Antigravity CLI:     ${agyCliStatus}
+  🔵 Antigravity IDE:     ${agyIdeStatus}
+  🔵 Gemini Ecosystem:    ${geminiCoreStatus}
   🟡 OpenCode:            ${opencodeStatus}
   📂 Project Workspace:   ${wsStatus}
 
@@ -687,7 +755,7 @@ if (['unmute', '--unmute'].includes(cmd)) {
   process.exit(0);
 }
 
-// 5. Desktop Notifications
+// 5. Desktop Notifications Management
 if (['notify', 'notification', '--notify'].includes(cmd)) {
   const cfg = loadConfig();
   const sub = (args[1] || '').toLowerCase();
@@ -699,9 +767,72 @@ if (['notify', 'notification', '--notify'].includes(cmd)) {
     cfg.desktop_notifications = false;
     saveConfig(cfg);
     console.log('🔕 Desktop notification banners disabled.');
+  } else if (sub === 'sound') {
+    const soundOpt = (args[2] || '').toLowerCase();
+    if (['on', 'true', '1', 'enable'].includes(soundOpt)) {
+      cfg.notification_sound = true;
+      saveConfig(cfg);
+      console.log('🔊 Notification toast system sound enabled.');
+    } else if (['off', 'false', '0', 'disable'].includes(soundOpt)) {
+      cfg.notification_sound = false;
+      saveConfig(cfg);
+      console.log('🔇 Notification toast system sound disabled (silent toast).');
+    } else {
+      console.log(`Notification toast sound: ${cfg.notification_sound ? 'Enabled 🔊' : 'Silent 🔇'}`);
+      console.log('Toggle with: alarm notify sound [on|off]');
+    }
+  } else if (sub === 'title') {
+    if (args[2]) {
+      cfg.notification_title = args.slice(2).join(' ');
+      saveConfig(cfg);
+      console.log(`✓ Notification title set to: "${cfg.notification_title}"`);
+    } else {
+      console.log('Usage: alarm notify title <custom_title>');
+    }
+  } else if (sub === 'webhook') {
+    const targetHook = args[2] || '';
+    if (!targetHook) {
+      if (cfg.webhook_url) {
+        console.log(`Current webhook URL: ${cfg.webhook_url}`);
+        console.log('To clear: alarm notify webhook clear');
+      } else {
+        console.log('No webhook configured.');
+        console.log('Usage: alarm notify webhook <url>');
+      }
+    } else if (['clear', 'off', 'disable'].includes(targetHook.toLowerCase())) {
+      cfg.webhook_url = '';
+      saveConfig(cfg);
+      console.log('✓ Webhook alerts disabled and cleared.');
+    } else {
+      cfg.webhook_url = targetHook;
+      saveConfig(cfg);
+      console.log(`✓ Webhook URL configured: ${targetHook}`);
+      console.log('💡 Test with: alarm notify test');
+    }
+  } else if (sub === 'test') {
+    console.log('🚀 Sending test notification...');
+    sendDesktopNotification('test', 'This is a test notification from AI-Alarm!');
+    console.log('✓ Test notification dispatched (desktop toast & webhook if configured).');
   } else {
-    console.log(`Desktop notification banners: ${cfg.desktop_notifications ? 'Enabled 🔔' : 'Disabled 🔕'}`);
-    console.log(`Toggle with: alarm notify ${cfg.desktop_notifications ? 'off' : 'on'}`);
+    console.log(`
+╔═══════════════════════════════════════════════════════════════════╗
+║               AI-ALARM NOTIFICATION SYSTEM MANAGER                ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+  Desktop Banners:    ${cfg.desktop_notifications !== false ? 'Enabled 🔔' : 'Disabled 🔕'}
+  Banner Chime:       ${cfg.notification_sound ? 'Enabled 🔊' : 'Silent 🔇'}
+  Banner Title:       ${cfg.notification_title || 'AI-Alarm'}
+  Webhook Alert:      ${cfg.webhook_url ? `Configured 🌐 (${cfg.webhook_url})` : 'None ⚪'}
+
+  AVAILABLE COMMANDS:
+    alarm notify on               Enable desktop notification banners
+    alarm notify off              Disable desktop notification banners
+    alarm notify sound on|off     Toggle system chime in notification toasts
+    alarm notify title <text>     Customize notification banner title
+    alarm notify webhook <url>    Set Slack/Discord incoming webhook URL
+    alarm notify webhook clear    Disable webhook alerts
+    alarm notify test             Send test notification toast & webhook
+`);
   }
   process.exit(0);
 }

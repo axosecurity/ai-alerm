@@ -110,15 +110,47 @@ show_status_dashboard() {
       codexStatus = hasHook ? "\x1b[1;32m✓ Configured\x1b[0m (~/.codex/config.toml)" : "\x1b[33m○ Not configured\x1b[0m";
     }
 
-    const agyPath = path.join(home, ".gemini", "config", "hooks.json");
-    let agyStatus = "\x1b[31m○ Not installed\x1b[0m";
-    if (fs.existsSync(agyPath)) {
-      try {
-        const h = JSON.parse(fs.readFileSync(agyPath, "utf8"));
-        const hasHook = Boolean(h["task-finished-alarm"]);
-        agyStatus = hasHook ? "\x1b[1;32m✓ Configured\x1b[0m (~/.gemini/config/hooks.json)" : "\x1b[33m○ Not configured\x1b[0m";
-      } catch(e) { agyStatus = "\x1b[33m○ Error parsing\x1b[0m"; }
+    // Antigravity & Gemini status checks across all 3 interfaces
+    const agyCliPaths = [
+      path.join(home, ".gemini", "antigravity-cli", "hooks.json"),
+      path.join(home, ".antigravity", "hooks.json")
+    ];
+    const agyIdePaths = [
+      path.join(home, ".gemini", "antigravity-ide", "hooks.json"),
+      path.join(home, ".antigravity-ide", "hooks.json")
+    ];
+    const geminiCorePaths = [
+      path.join(home, ".gemini", "config", "hooks.json"),
+      path.join(home, ".gemini", "antigravity", "hooks.json")
+    ];
+
+    function checkHookList(paths) {
+      for (const p of paths) {
+        if (fs.existsSync(p)) {
+          try {
+            const h = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (h["task-finished-alarm"]) return { configured: true, path: p };
+          } catch(e){}
+        }
+      }
+      return { configured: false };
     }
+
+    const cliCheck = checkHookList(agyCliPaths);
+    const ideCheck = checkHookList(agyIdePaths);
+    const coreCheck = checkHookList(geminiCorePaths);
+
+    const agyCliStatus = cliCheck.configured
+      ? `\x1b[1;32m✓ Configured\x1b[0m (${cliCheck.path.replace(home, "~")})`
+      : `\x1b[33m○ Not configured\x1b[0m`;
+
+    const agyIdeStatus = ideCheck.configured
+      ? `\x1b[1;32m✓ Configured\x1b[0m (${ideCheck.path.replace(home, "~")})`
+      : `\x1b[33m○ Not configured\x1b[0m`;
+
+    const geminiCoreStatus = coreCheck.configured
+      ? `\x1b[1;32m✓ Configured\x1b[0m (${coreCheck.path.replace(home, "~")})`
+      : `\x1b[33m○ Not configured\x1b[0m`;
 
     const opencodePath = path.join(home, ".config", "opencode", "plugins", "task-finished-alarm.ts");
     let opencodeStatus = fs.existsSync(opencodePath) ? "\x1b[1;32m✓ Configured\x1b[0m (~/.config/opencode/plugins/)" : "\x1b[31m○ Not installed\x1b[0m";
@@ -132,6 +164,8 @@ show_status_dashboard() {
       } catch(e){}
     }
 
+    const notifTitle = config.notification_title ? String(config.notification_title) : "AI-Alarm";
+
     console.log(`
 ╔═══════════════════════════════════════════════════════════════════╗
 ║                 AI-ALARM STATUS & CONFIGURATION                   ║
@@ -141,7 +175,13 @@ show_status_dashboard() {
   ───────────────
   🔊 Volume:              \x1b[1;33m${vol}%\x1b[0m  [\x1b[32m${bar}\x1b[0m]
   🔇 Mute State:          ${config.muted ? "\x1b[1;31mMuted 🔇 (Silent mode)\x1b[0m" : "\x1b[1;32mActive 🔊 (Audio enabled)\x1b[0m"}
-  🔔 Desktop Banners:     ${config.desktop_notifications !== false ? "\x1b[1;32mEnabled 🔔 (Native notification toasts)\x1b[0m" : "\x1b[33mDisabled 🔕\x1b[0m"}
+
+  \x1b[1mNOTIFICATION SETTINGS\x1b[0m
+  ──────────────────────
+  🔔 Desktop Banners:     ${config.desktop_notifications !== false ? "\x1b[1;32mEnabled 🔔\x1b[0m" : "\x1b[33mDisabled 🔕\x1b[0m"}
+  🔊 Banner Chime:        ${config.notification_sound ? "\x1b[1;32mEnabled 🔊\x1b[0m" : "\x1b[2mSilent 🔇\x1b[0m"}
+  🏷️  Banner Title:        "${notifTitle}"
+  🌐 Webhook URL:         ${config.webhook_url ? `\x1b[1;36m${config.webhook_url}\x1b[0m` : "\x1b[2mNone (Slack / Discord)\x1b[0m"}
 
   \x1b[1mASSIGNED SOUNDS\x1b[0m
   ───────────────
@@ -155,7 +195,9 @@ show_status_dashboard() {
   ───────────────────────
   🟣 Claude Code:         ${claudeStatus}
   🟢 OpenAI Codex:        ${codexStatus}
-  🔵 Google Antigravity:  ${agyStatus}
+  🔵 Antigravity CLI:     ${agyCliStatus}
+  🔵 Antigravity IDE:     ${agyIdeStatus}
+  🔵 Gemini Ecosystem:    ${geminiCoreStatus}
   🟡 OpenCode:            ${opencodeStatus}
   📂 Project Workspace:   ${wsStatus}
 
@@ -236,30 +278,38 @@ run_uninstall() {
     } catch(e){}
   ' 2>/dev/null || true
 
-  # 3. Google Antigravity
+  # 3. Google Antigravity & Gemini Ecosystem
   node -e '
     const fs = require("fs");
     const path = require("path");
-    const p = path.join(process.env.HOME, ".gemini", "config", "hooks.json");
-    if (fs.existsSync(p)) {
-      try {
-        let h = JSON.parse(fs.readFileSync(p, "utf8"));
-        if (h["task-finished-alarm"]) {
-          delete h["task-finished-alarm"];
-          fs.writeFileSync(p, JSON.stringify(h, null, 2) + "\n");
-          console.log("  ✓ Removed Google Antigravity hook (~/.gemini/config/hooks.json)");
-        }
-      } catch(e){}
+    const home = process.env.HOME || process.env.USERPROFILE;
+    const allHooks = [
+      path.join(home, ".gemini", "config", "hooks.json"),
+      path.join(home, ".gemini", "antigravity", "hooks.json"),
+      path.join(home, ".gemini", "antigravity-cli", "hooks.json"),
+      path.join(home, ".gemini", "antigravity-ide", "hooks.json"),
+      path.join(home, ".antigravity", "hooks.json"),
+      path.join(home, ".antigravity-ide", "hooks.json")
+    ];
+    let removedAny = false;
+    for (const p of allHooks) {
+      if (fs.existsSync(p)) {
+        try {
+          if (fs.lstatSync(p).isSymbolicLink()) {
+            fs.unlinkSync(p);
+            removedAny = true;
+          } else {
+            let h = JSON.parse(fs.readFileSync(p, "utf8"));
+            if (h["task-finished-alarm"]) {
+              delete h["task-finished-alarm"];
+              fs.writeFileSync(p, JSON.stringify(h, null, 2) + "\n");
+              removedAny = true;
+            }
+          }
+        } catch(e){}
+      }
     }
-    const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
-    for (const f of flavors) {
-      const fHook = path.join(process.env.HOME, ".gemini", f, "hooks.json");
-      try {
-        if (fs.existsSync(fHook) && fs.lstatSync(fHook).isSymbolicLink()) {
-          fs.unlinkSync(fHook);
-        }
-      } catch(e){}
-    }
+    if (removedAny) console.log("  ✓ Removed Antigravity & Gemini hooks across all interfaces");
   ' 2>/dev/null || true
 
   # 4. OpenCode
@@ -850,6 +900,146 @@ play_preview() {
 }
 
 # -------------------------------------------------------------
+# Interactive Notification System & Webhook Settings Manager
+# -------------------------------------------------------------
+configure_notifications_interactive() {
+  local TTY_DEV="/dev/tty"
+  [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
+
+  local ALARM_CMD="${TARGET_ALARM_BIN:-$INSTALL_DIR/alarm}"
+  [ ! -x "$ALARM_CMD" ] && ALARM_CMD="alarm"
+
+  while true; do
+    local notify_state
+    notify_state="$(node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const cfgPath = path.join(process.argv[1], "config.json");
+      let cfg = { desktop_notifications: true, notification_sound: false, notification_title: "AI-Alarm", webhook_url: "" };
+      if (fs.existsSync(cfgPath)) {
+        try { cfg = Object.assign(cfg, JSON.parse(fs.readFileSync(cfgPath, "utf8"))); } catch(e){}
+      }
+      console.log(JSON.stringify(cfg));
+    ' "$INSTALL_DIR" 2>/dev/null || echo '{"desktop_notifications":true,"notification_sound":false,"notification_title":"AI-Alarm","webhook_url":""}')"
+
+    local d_on s_on title webhook
+    d_on="$(node -e 'console.log(JSON.parse(process.argv[1]).desktop_notifications !== false)' "$notify_state" 2>/dev/null || echo "true")"
+    s_on="$(node -e 'console.log(Boolean(JSON.parse(process.argv[1]).notification_sound))' "$notify_state" 2>/dev/null || echo "false")"
+    title="$(node -e 'console.log(JSON.parse(process.argv[1]).notification_title || "AI-Alarm")' "$notify_state" 2>/dev/null || echo "AI-Alarm")"
+    webhook="$(node -e 'console.log(JSON.parse(process.argv[1]).webhook_url || "")' "$notify_state" 2>/dev/null || echo "")"
+
+    local d_label="\033[31mDisabled 🔕\033[0m"
+    [ "$d_on" = "true" ] && d_label="\033[1;32mEnabled 🔔\033[0m"
+
+    local s_label="\033[2mSilent 🔇\033[0m"
+    [ "$s_on" = "true" ] && s_label="\033[1;32mEnabled 🔊\033[0m"
+
+    local w_label="\033[2mNone (Slack / Discord)\033[0m"
+    [ -n "$webhook" ] && w_label="\033[1;36m$webhook\033[0m"
+
+    local n_opts=(
+      "🔔 Desktop Notification Banners: $d_label [Toggle]"
+      "🔊 Banner Audio Chime:           $s_label [Toggle]"
+      "🏷️  Custom Banner Title:          \"$title\" [Change]"
+      "🌐 Webhook URL:                  $w_label [Edit/Clear]"
+      "🚀 Send Test Notification Toast & Webhook"
+      "↩️  Back to Sound Selection"
+    )
+
+    local cur=0
+    local first=true
+    tput civis 2>/dev/null || printf "\033[?25l"
+    stty -echo -icanon 2>/dev/null || true
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " 🔔 Notification System & Webhook Manager"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " Controls: [↑ / ↓] Navigate   [Enter] Select / Toggle   [q] Back"
+    echo ""
+
+    while true; do
+      if [ "$first" = false ]; then
+        printf "\033[%dA" "${#n_opts[@]}"
+      fi
+      first=false
+
+      for i in "${!n_opts[@]}"; do
+        if [ "$i" -eq "$cur" ]; then
+          printf "\033[2K \033[1;32m ❯ [●] %b\033[0m\n" "${n_opts[$i]}"
+        else
+          printf "\033[2K   [ ] %b\n" "${n_opts[$i]}"
+        fi
+      done
+
+      local ch=""
+      local r=""
+      IFS= read -rsn1 ch < "$TTY_DEV" || true
+      if [[ "$ch" == $'\033' ]]; then
+        read -rsn2 -t 1 r < "$TTY_DEV" || true
+        ch+="$r"
+      fi
+
+      case "$ch" in
+        $'\033[A'|"k"|"K") [ "$cur" -gt 0 ] && cur=$((cur - 1)) || cur=$((${#n_opts[@]} - 1)) ;;
+        $'\033[B'|"j"|"J") [ "$cur" -lt $((${#n_opts[@]} - 1)) ] && cur=$((cur + 1)) || cur=0 ;;
+        "") break ;;
+        "q"|"Q")
+          tput cnorm 2>/dev/null || printf "\033[?25h"
+          stty echo icanon 2>/dev/null || true
+          return 0
+          ;;
+      esac
+    done
+
+    tput cnorm 2>/dev/null || printf "\033[?25h"
+    stty echo icanon 2>/dev/null || true
+
+    case "$cur" in
+      0) # Toggle Banners
+        if [ "$d_on" = "true" ]; then
+          "$ALARM_CMD" notify off 2>/dev/null || true
+        else
+          "$ALARM_CMD" notify on 2>/dev/null || true
+        fi
+        ;;
+      1) # Toggle Chime
+        if [ "$s_on" = "true" ]; then
+          "$ALARM_CMD" notify sound off 2>/dev/null || true
+        else
+          "$ALARM_CMD" notify sound on 2>/dev/null || true
+        fi
+        ;;
+      2) # Change Title
+        echo ""
+        printf "Enter custom notification title (e.g. 'Task Complete'): "
+        read -r new_title < "$TTY_DEV"
+        if [ -n "$new_title" ]; then
+          "$ALARM_CMD" notify title "$new_title" 2>/dev/null || true
+        fi
+        ;;
+      3) # Edit Webhook
+        echo ""
+        echo "Enter incoming webhook URL (Slack / Discord), or 'clear' to disable:"
+        read -r new_hook < "$TTY_DEV"
+        if [ -n "$new_hook" ]; then
+          "$ALARM_CMD" notify webhook "$new_hook" 2>/dev/null || true
+        fi
+        ;;
+      4) # Test
+        echo ""
+        "$ALARM_CMD" notify test 2>/dev/null || true
+        echo "Press Enter to continue..."
+        read -r _ < "$TTY_DEV"
+        ;;
+      5) # Back
+        return 0
+        ;;
+    esac
+  done
+}
+
+# -------------------------------------------------------------
 # Rich Interactive Sound Selector with Search & Category Filter
 # -------------------------------------------------------------
 select_audio_flow() {
@@ -1015,6 +1205,8 @@ select_audio_flow() {
     # Add interactive actions
     local act_add_idx=${#DISPLAY_LIST[@]}
     DISPLAY_LIST+=("➕ [Import / Add Custom Sound (File or URL)...]")
+    local act_notify_idx=${#DISPLAY_LIST[@]}
+    DISPLAY_LIST+=("🔔 [Manage Notification System & Webhook Alerts...]")
     local act_prune_idx=${#DISPLAY_LIST[@]}
     DISPLAY_LIST+=("🧹 [Prune Unused Sounds (Free Disk Space)]")
     local act_restore_idx=${#DISPLAY_LIST[@]}
@@ -1146,6 +1338,10 @@ select_audio_flow() {
             else
               return 1
             fi
+          # Handle Action: Manage Notifications & Webhooks
+          elif [ "$current_idx" -eq "$act_notify_idx" ]; then
+            configure_notifications_interactive
+            break
           # Handle Action: Prune Unused Sounds
           elif [ "$current_idx" -eq "$act_prune_idx" ]; then
             prune_sounds
@@ -1461,40 +1657,72 @@ else
   echo "  ℹ OpenAI Codex skipped (unselected)."
 fi
 
-# --- C. Google Antigravity (CLI, Antigravity 2.0, IDE) ---
+# --- C. Google Antigravity & Gemini Ecosystem (CLI, Antigravity 2.0, IDE) ---
 if [ "$INSTALL_ANTIGRAVITY" = true ]; then
-  if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
+  if [ -d "$HOME/.gemini" ] || [ -d "$HOME/.antigravity" ] || [ -d "$HOME/.antigravity-ide" ] || command -v agy >/dev/null 2>&1; then
     mkdir -p "$HOME/.gemini/config"
     node -e '
       const fs = require("fs");
       const path = require("path");
-      const hooksPath = path.join(process.env.HOME, ".gemini", "config", "hooks.json");
-      let hooks = {};
-      if (fs.existsSync(hooksPath)) {
-        try { hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8")); } catch(e){}
-      }
-      hooks["task-finished-alarm"] = {
-        Stop: [
-          {
-            type: "command",
-            command: process.argv[1] + " antigravity",
-            timeout: 15
+      const home = process.env.HOME || process.env.USERPROFILE;
+      const hooksPath = path.join(home, ".gemini", "config", "hooks.json");
+
+      function writeHook(targetPath) {
+        try {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          let h = {};
+          if (fs.existsSync(targetPath)) {
+            try { h = JSON.parse(fs.readFileSync(targetPath, "utf8")); } catch(e){}
           }
-        ]
-      };
-      fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+          h["task-finished-alarm"] = {
+            Stop: [
+              {
+                type: "command",
+                command: process.argv[1] + " antigravity",
+                timeout: 15
+              }
+            ]
+          };
+          fs.writeFileSync(targetPath, JSON.stringify(h, null, 2) + "\n");
+          return true;
+        } catch(e) { return false; }
+      }
+
+      writeHook(hooksPath);
       console.log("  ✓ Antigravity global hook configured: ~/.gemini/config/hooks.json");
 
+      // Configure .gemini subdirs
       const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
       for (const f of flavors) {
-        const fDir = path.join(process.env.HOME, ".gemini", f);
+        const fDir = path.join(home, ".gemini", f);
         if (fs.existsSync(fDir)) {
           const fHook = path.join(fDir, "hooks.json");
           try {
             if (!fs.existsSync(fHook)) {
               fs.symlinkSync(hooksPath, fHook);
+            } else {
+              writeHook(fHook);
             }
-          } catch(e) {}
+          } catch(e) { writeHook(fHook); }
+        }
+      }
+
+      // Configure standalone ~/.antigravity and ~/.antigravity-ide
+      const standalones = [
+        path.join(home, ".antigravity"),
+        path.join(home, ".antigravity-ide")
+      ];
+      for (const sDir of standalones) {
+        if (fs.existsSync(sDir)) {
+          const sHook = path.join(sDir, "hooks.json");
+          try {
+            if (!fs.existsSync(sHook)) {
+              fs.symlinkSync(hooksPath, sHook);
+            } else {
+              writeHook(sHook);
+            }
+          } catch(e) { writeHook(sHook); }
+          console.log("  ✓ Antigravity standalone hook configured: " + sHook.replace(home, "~"));
         }
       }
     ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Antigravity hook configuration skipped."
