@@ -196,16 +196,30 @@ if [ -z "$SOUND" ] || [ ! -f "$SOUND" ]; then
 fi
 
 # 3. Play Sound using native system player
-if command -v afplay >/dev/null 2>&1; then
-  afplay "$SOUND"
-elif command -v paplay >/dev/null 2>&1; then
-  paplay "$SOUND"
-elif command -v mpv >/dev/null 2>&1; then
-  mpv --no-video "$SOUND" >/dev/null 2>&1
-elif command -v ffplay >/dev/null 2>&1; then
-  ffplay -nodisp -autoexit "$SOUND" >/dev/null 2>&1
-elif command -v aplay >/dev/null 2>&1; then
-  aplay "$SOUND"
+play_audio() {
+  if command -v afplay >/dev/null 2>&1; then
+    afplay "$SOUND"
+  elif command -v paplay >/dev/null 2>&1; then
+    paplay "$SOUND"
+  elif command -v mpv >/dev/null 2>&1; then
+    mpv --no-video "$SOUND" >/dev/null 2>&1
+  elif command -v ffplay >/dev/null 2>&1; then
+    ffplay -nodisp -autoexit "$SOUND" >/dev/null 2>&1
+  elif command -v aplay >/dev/null 2>&1; then
+    aplay "$SOUND"
+  else
+    echo -e "\a"
+  fi
+}
+
+# If called by an agent hook or non-interactively, play in background so agent is not blocked
+if [ -n "$AGENT" ] || [ ! -t 0 ]; then
+  (play_audio >/dev/null 2>&1 &)
+  # Antigravity hook contract expects JSON on stdout
+  if [ "$AGENT" = "antigravity" ] || [ -n "${ANTIGRAVITY_APP_ROOT:-}" ] || [ -n "${AGY_CLI:-}" ]; then
+    echo "{}"
+  fi
+  exit 0
 else
-  echo -e "\a"
+  play_audio
 fi

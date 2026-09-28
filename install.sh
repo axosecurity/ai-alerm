@@ -372,7 +372,7 @@ EOF
   fi
 fi
 
-# --- C. Google Antigravity ---
+# --- C. Google Antigravity (CLI, Antigravity 2.0, IDE) ---
 if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
   mkdir -p "$HOME/.gemini/config"
   node -e '
@@ -393,8 +393,46 @@ if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
       ]
     };
     fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
-    console.log("  ✓ Antigravity hook configured (command: alarm antigravity)");
+    console.log("  ✓ Antigravity global hook configured: ~/.gemini/config/hooks.json");
+
+    // Mirror to Antigravity CLI, Antigravity 2.0, and Antigravity IDE directories
+    const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
+    for (const f of flavors) {
+      const fDir = path.join(process.env.HOME, ".gemini", f);
+      if (fs.existsSync(fDir)) {
+        const fHook = path.join(fDir, "hooks.json");
+        try {
+          if (!fs.existsSync(fHook)) {
+            fs.symlinkSync(hooksPath, fHook);
+          }
+        } catch(e) {}
+      }
+    }
   ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Antigravity hook configuration skipped."
+fi
+
+# Optional: Project-local workspace hook (.agents/hooks.json)
+if [ -d ".agents" ] || [ "${1:-}" = "--project" ] || [ "${2:-}" = "--project" ]; then
+  mkdir -p .agents
+  node -e '
+    const fs = require("fs");
+    const hooksPath = ".agents/hooks.json";
+    let hooks = {};
+    if (fs.existsSync(hooksPath)) {
+      try { hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8")); } catch(e){}
+    }
+    hooks["task-finished-alarm"] = {
+      Stop: [
+        {
+          type: "command",
+          command: process.argv[1] + " antigravity",
+          timeout: 15
+        }
+      ]
+    };
+    fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+    console.log("  ✓ Project workspace hook configured in .agents/hooks.json");
+  ' "$TARGET_ALARM_BIN" 2>/dev/null || true
 fi
 
 # --- D. OpenCode ---
