@@ -669,7 +669,20 @@ echo "╔═══════════════════════�
 echo "║          AI-ALARM UNIVERSAL AGENT HOOKS SETUP             ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 
-select_audio_flow "global"
+if [ "${1:-}" = "-y" ] || [ "${1:-}" = "--yes" ] || [ "${1:-}" = "--all" ]; then
+  if [ ! -L "$INSTALL_DIR/alarm_sound.mp3" ]; then
+    shopt -s nullglob nocaseglob
+    FIRST_MP3=( "$INSTALL_DIR"/sound/*.{mp3,wav,m4a,aac,ogg,flac,aiff} )
+    if [ -f "${FIRST_MP3[0]}" ]; then
+      ln -sf "sound/$(basename "${FIRST_MP3[0]}")" "$INSTALL_DIR/alarm_sound.mp3"
+      echo "✓ Using default sound: $(basename "${FIRST_MP3[0]}")"
+    fi
+  else
+    echo "✓ Keeping current default sound."
+  fi
+else
+  select_audio_flow "global"
+fi
 
 BIN_DIR=""
 if [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
@@ -691,58 +704,191 @@ echo "  ✓ Installed: $BIN_DIR/notify"
 
 TARGET_ALARM_BIN="$BIN_DIR/alarm"
 
+# -------------------------------------------------------------
+# Agent Selection & Consent Menu
+# -------------------------------------------------------------
+select_agents_to_configure() {
+  local TTY_DEV="/dev/tty"
+  [ ! -r "$TTY_DEV" ] && TTY_DEV="/dev/stdin"
+
+  local has_claude=false
+  local has_codex=false
+  local has_antigravity=false
+  local has_opencode=false
+  local has_workspace=false
+
+  ([ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1) && has_claude=true
+  ([ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1) && has_codex=true
+  ([ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1) && has_antigravity=true
+  ([ -d "$HOME/.config/opencode" ] || command -v opencode >/dev/null 2>&1) && has_opencode=true
+  [ -d ".agents" ] && has_workspace=true
+
+  local agent_labels=(
+    "🚀 All Detected Agents (Recommended)"
+    "🟣 Claude Code (~/.claude/settings.json)"
+    "🟢 OpenAI Codex (~/.codex/config.toml)"
+    "🔵 Google Antigravity (CLI, 2.0, IDE)"
+    "🟡 OpenCode (~/.config/opencode/plugins/)"
+    "📁 Current Project Workspace (.agents/hooks.json)"
+  )
+
+  local agent_status=(
+    ""
+    "$([ "$has_claude" = true ] && echo "(detected)" || echo "(not installed)")"
+    "$([ "$has_codex" = true ] && echo "(detected)" || echo "(not installed)")"
+    "$([ "$has_antigravity" = true ] && echo "(detected)" || echo "(not installed)")"
+    "$([ "$has_opencode" = true ] && echo "(detected)" || echo "(not installed)")"
+    "$([ "$has_workspace" = true ] && echo "(found .agents)" || echo "(optional)")"
+  )
+
+  local checked=(true "$has_claude" "$has_codex" "$has_antigravity" "$has_opencode" false)
+  local cur=0
+  local total=${#agent_labels[@]}
+  local first=true
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 🤖 Select AI Coding Agents to Configure Hooks For:"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " Controls: [↑ / ↓] Navigate   [Space] Toggle checkbox   [Enter] Confirm"
+  echo ""
+
+  tput civis 2>/dev/null || printf "\033[?25l"
+  stty -echo -icanon 2>/dev/null || true
+
+  while true; do
+    if [ "$first" = false ]; then
+      printf "\033[%dA" "$total"
+    fi
+    first=false
+
+    for i in "${!agent_labels[@]}"; do
+      local mark=" "
+      [ "${checked[$i]}" = true ] && mark="✔"
+      local color="\033[0m"
+      [ "${checked[$i]}" = true ] && color="\033[1;32m"
+      local status_info="${agent_status[$i]}"
+      [ -n "$status_info" ] && status_info=" \033[2m$status_info\033[0m"
+
+      if [ "$i" -eq "$cur" ]; then
+        printf "\033[2K  \033[1;32m❯\033[0m [%b%s\033[0m] %s%b\n" "$color" "$mark" "${agent_labels[$i]}" "$status_info"
+      else
+        printf "\033[2K    [%b%s\033[0m] %s%b\n" "$color" "$mark" "${agent_labels[$i]}" "$status_info"
+      fi
+    done
+
+    local key=""
+    local rest=""
+    IFS= read -rsn1 key < "$TTY_DEV" || true
+    if [[ "$key" == $'\033' ]]; then
+      read -rsn2 -t 1 rest < "$TTY_DEV" || true
+      key+="$rest"
+    fi
+
+    case "$key" in
+      $'\033[A'|"k"|"K") [ "$cur" -gt 0 ] && cur=$((cur - 1)) || cur=$((total - 1)) ;;
+      $'\033[B'|"j"|"J") [ "$cur" -lt $((total - 1)) ] && cur=$((cur + 1)) || cur=0 ;;
+      " ")
+        if [ "$cur" -eq 0 ]; then
+          local new_state=true
+          [ "${checked[0]}" = true ] && new_state=false
+          checked[0]=$new_state
+          checked[1]=$([ "$has_claude" = true ] && echo "$new_state" || echo false)
+          checked[2]=$([ "$has_codex" = true ] && echo "$new_state" || echo false)
+          checked[3]=$([ "$has_antigravity" = true ] && echo "$new_state" || echo false)
+          checked[4]=$([ "$has_opencode" = true ] && echo "$new_state" || echo false)
+        else
+          if [ "${checked[$cur]}" = true ]; then
+            checked[$cur]=false
+            checked[0]=false
+          else
+            checked[$cur]=true
+          fi
+        fi
+        ;;
+      "") break ;;
+    esac
+  done
+
+  tput cnorm 2>/dev/null || printf "\033[?25h"
+  stty echo icanon 2>/dev/null || true
+
+  INSTALL_CLAUDE="${checked[1]}"
+  INSTALL_CODEX="${checked[2]}"
+  INSTALL_ANTIGRAVITY="${checked[3]}"
+  INSTALL_OPENCODE="${checked[4]}"
+  INSTALL_WORKSPACE="${checked[5]}"
+}
+
+INSTALL_CLAUDE=true
+INSTALL_CODEX=true
+INSTALL_ANTIGRAVITY=true
+INSTALL_OPENCODE=true
+INSTALL_WORKSPACE=false
+
+if [ "${1:-}" != "--yes" ] && [ "${1:-}" != "-y" ] && [ "${1:-}" != "--all" ] && [ -t 0 -o -r "/dev/tty" ]; then
+  select_agents_to_configure
+fi
+
 echo ""
-echo "→ Auto-detecting and configuring AI coding agent hooks..."
+echo "→ Configuring selected AI coding agent hooks..."
 
 # --- A. Claude Code ---
-if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
-  node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const settingsPath = path.join(process.env.HOME, ".claude", "settings.json");
-    let settings = {};
-    if (fs.existsSync(settingsPath)) {
-      try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch(e){}
-    }
-    if (!settings.hooks) settings.hooks = {};
-    if (!settings.hooks.Stop) settings.hooks.Stop = [];
-    
-    let exists = false;
-    for (const item of settings.hooks.Stop) {
-      if (item.hooks) {
-        for (const h of item.hooks) {
-          if (h.command && h.command.includes("alarm")) {
-            h.command = process.argv[1] + " claude";
-            exists = true;
+if [ "$INSTALL_CLAUDE" = true ]; then
+  if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
+    node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const settingsPath = path.join(process.env.HOME, ".claude", "settings.json");
+      let settings = {};
+      if (fs.existsSync(settingsPath)) {
+        try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch(e){}
+      }
+      if (!settings.hooks) settings.hooks = {};
+      if (!settings.hooks.Stop) settings.hooks.Stop = [];
+      
+      let exists = false;
+      for (const item of settings.hooks.Stop) {
+        if (item.hooks) {
+          for (const h of item.hooks) {
+            if (h.command && h.command.includes("alarm")) {
+              h.command = process.argv[1] + " claude";
+              exists = true;
+            }
           }
         }
       }
-    }
-    if (!exists) {
-      settings.hooks.Stop.push({
-        hooks: [
-          {
-            type: "command",
-            command: process.argv[1] + " claude",
-            timeout: 15
-          }
-        ]
-      });
-    }
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-    console.log("  ✓ Claude Code hook configured (command: alarm claude)");
-  ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Claude Code hook configuration skipped."
+      if (!exists) {
+        settings.hooks.Stop.push({
+          hooks: [
+            {
+              type: "command",
+              command: process.argv[1] + " claude",
+              timeout: 15
+            }
+          ]
+        });
+      }
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+      console.log("  ✓ Claude Code hook configured (command: alarm claude)");
+    ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Claude Code hook configuration skipped."
+  else
+    echo "  ℹ Claude Code not detected on system."
+  fi
+else
+  echo "  ℹ Claude Code skipped (unselected)."
 fi
 
 # --- B. OpenAI Codex ---
-if [ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1; then
-  mkdir -p "$HOME/.codex"
-  CODEX_CONFIG="$HOME/.codex/config.toml"
-  if [ -f "$CODEX_CONFIG" ] && grep -q 'hooks.Stop' "$CODEX_CONFIG" && grep -q 'alarm' "$CODEX_CONFIG"; then
-    echo "  ✓ Codex Stop hook already configured in ~/.codex/config.toml"
-  else
-    cat >> "$CODEX_CONFIG" << EOF
+if [ "$INSTALL_CODEX" = true ]; then
+  if [ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1; then
+    mkdir -p "$HOME/.codex"
+    CODEX_CONFIG="$HOME/.codex/config.toml"
+    if [ -f "$CODEX_CONFIG" ] && grep -q 'hooks.Stop' "$CODEX_CONFIG" && grep -q 'alarm' "$CODEX_CONFIG"; then
+      echo "  ✓ Codex Stop hook already configured in ~/.codex/config.toml"
+    else
+      cat >> "$CODEX_CONFIG" << EOF
 
 [[hooks.Stop]]
 matcher = "always"
@@ -753,50 +899,85 @@ matcher = "always"
   timeout = 15
   trust_level = "trusted"
 EOF
-    echo "  ✓ Codex Stop hook configured (command: alarm codex)"
+      echo "  ✓ Codex Stop hook configured (command: alarm codex)"
+    fi
+  else
+    echo "  ℹ OpenAI Codex not detected on system."
   fi
+else
+  echo "  ℹ OpenAI Codex skipped (unselected)."
 fi
 
 # --- C. Google Antigravity (CLI, Antigravity 2.0, IDE) ---
-if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
-  mkdir -p "$HOME/.gemini/config"
-  node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const hooksPath = path.join(process.env.HOME, ".gemini", "config", "hooks.json");
-    let hooks = {};
-    if (fs.existsSync(hooksPath)) {
-      try { hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8")); } catch(e){}
-    }
-    hooks["task-finished-alarm"] = {
-      Stop: [
-        {
-          type: "command",
-          command: process.argv[1] + " antigravity",
-          timeout: 15
-        }
-      ]
-    };
-    fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
-    console.log("  ✓ Antigravity global hook configured: ~/.gemini/config/hooks.json");
-
-    const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
-    for (const f of flavors) {
-      const fDir = path.join(process.env.HOME, ".gemini", f);
-      if (fs.existsSync(fDir)) {
-        const fHook = path.join(fDir, "hooks.json");
-        try {
-          if (!fs.existsSync(fHook)) {
-            fs.symlinkSync(hooksPath, fHook);
-          }
-        } catch(e) {}
+if [ "$INSTALL_ANTIGRAVITY" = true ]; then
+  if [ -d "$HOME/.gemini" ] || command -v agy >/dev/null 2>&1; then
+    mkdir -p "$HOME/.gemini/config"
+    node -e '
+      const fs = require("fs");
+      const path = require("path");
+      const hooksPath = path.join(process.env.HOME, ".gemini", "config", "hooks.json");
+      let hooks = {};
+      if (fs.existsSync(hooksPath)) {
+        try { hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8")); } catch(e){}
       }
-    }
-  ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Antigravity hook configuration skipped."
+      hooks["task-finished-alarm"] = {
+        Stop: [
+          {
+            type: "command",
+            command: process.argv[1] + " antigravity",
+            timeout: 15
+          }
+        ]
+      };
+      fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+      console.log("  ✓ Antigravity global hook configured: ~/.gemini/config/hooks.json");
+
+      const flavors = ["antigravity", "antigravity-cli", "antigravity-ide"];
+      for (const f of flavors) {
+        const fDir = path.join(process.env.HOME, ".gemini", f);
+        if (fs.existsSync(fDir)) {
+          const fHook = path.join(fDir, "hooks.json");
+          try {
+            if (!fs.existsSync(fHook)) {
+              fs.symlinkSync(hooksPath, fHook);
+            }
+          } catch(e) {}
+        }
+      }
+    ' "$TARGET_ALARM_BIN" 2>/dev/null || echo "  ⚠ Antigravity hook configuration skipped."
+  else
+    echo "  ℹ Google Antigravity not detected on system."
+  fi
+else
+  echo "  ℹ Google Antigravity skipped (unselected)."
 fi
 
-# Optional: Project-local workspace hook (.agents/hooks.json)
-if [ -d ".agents" ] || [ "${1:-}" = "--project" ] || [ "${2:-}" = "--project" ]; then
+# --- D. OpenCode ---
+if [ "$INSTALL_OPENCODE" = true ]; then
+  if [ -d "$HOME/.config/opencode" ] || command -v opencode >/dev/null 2>&1; then
+    OPENCODE_PLUGINS="$HOME/.config/opencode/plugins"
+    mkdir -p "$OPENCODE_PLUGINS"
+    cat > "$OPENCODE_PLUGINS/task-finished-alarm.ts" << EOF
+export const TaskFinishedAlarmPlugin = async ({ $ }) => {
+  return {
+    event: async ({ event }) => {
+      if (event.type === "session.idle") {
+        await \$\`$TARGET_ALARM_BIN opencode\`
+      }
+    },
+  }
+}
+EOF
+    echo "  ✓ OpenCode plugin hook configured in $OPENCODE_PLUGINS/task-finished-alarm.ts"
+  else
+    echo "  ℹ OpenCode not detected on system."
+  fi
+else
+  echo "  ℹ OpenCode skipped (unselected)."
+fi
+
+# --- E. Project Workspace (.agents/hooks.json) ---
+if [ "$INSTALL_WORKSPACE" = true ]; then
   mkdir -p .agents
   node -e '
     const fs = require("fs");
@@ -817,24 +998,6 @@ if [ -d ".agents" ] || [ "${1:-}" = "--project" ] || [ "${2:-}" = "--project" ];
     fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
     console.log("  ✓ Project workspace hook configured in .agents/hooks.json");
   ' "$TARGET_ALARM_BIN" 2>/dev/null || true
-fi
-
-# --- D. OpenCode ---
-if [ -d "$HOME/.config/opencode" ] || command -v opencode >/dev/null 2>&1; then
-  OPENCODE_PLUGINS="$HOME/.config/opencode/plugins"
-  mkdir -p "$OPENCODE_PLUGINS"
-  cat > "$OPENCODE_PLUGINS/task-finished-alarm.ts" << EOF
-export const TaskFinishedAlarmPlugin = async ({ $ }) => {
-  return {
-    event: async ({ event }) => {
-      if (event.type === "session.idle") {
-        await \$\`$TARGET_ALARM_BIN opencode\`
-      }
-    },
-  }
-}
-EOF
-  echo "  ✓ OpenCode plugin hook configured in $OPENCODE_PLUGINS/task-finished-alarm.ts"
 fi
 
 echo ""
