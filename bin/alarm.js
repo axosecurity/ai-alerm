@@ -79,12 +79,16 @@ COMMANDS & OPTIONS:
     alarm restore             Download all community sounds for offline use (download-all)
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
+    alarm milestone [OPTIONS] Dispatch verified root milestone & team status to Slack
+                              Options: --task <name>, --summary <text>, --action <text>,
+                                       --status <completed|review_needed|failed>, --agent <name>
     alarm notify              Notification manager dashboard & settings
     alarm notify [on|off]     Toggle native desktop notification banners
+    alarm notify routine [on|off] Toggle Slack webhooks on routine subagent/stop hooks
     alarm notify sound [on|off] Toggle system sound inside notification toast
     alarm notify title <text> Set custom notification banner title
     alarm notify webhook <url> Configure Slack / Discord incoming webhook alert
-    alarm notify test         Dispatch test notification toast & webhook ping
+    alarm notify test         Dispatch verified test milestone card to Slack & desktop toast
     alarm --select [agent]    Interactive sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
     alarm update              Download latest community catalog from GitHub (sync)
@@ -110,10 +114,177 @@ EXAMPLES:
   process.exit(0);
 }
 
-// Desktop Notification Dispatcher
+// System Context Harvester (zero-token system metadata)
+function getSystemContext(targetDir) {
+  const dir = targetDir && fs.existsSync(targetDir) ? targetDir : process.cwd();
+  let projectName = path.basename(dir);
+  let branch = 'no git';
+
+  try {
+    const gitRoot = execSync('git rev-parse --show-toplevel', { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    if (gitRoot) projectName = path.basename(gitRoot);
+  } catch(e){}
+
+  try {
+    const gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    if (gitBranch) branch = gitBranch;
+  } catch(e){}
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+  return { projectName, branch, timestamp, dir };
+}
+
+// Low-level Slack / Webhook Dispatcher
+function sendSlackPayload(webhookUrl, payloadObj) {
+  if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) return;
+  try {
+    const payload = JSON.stringify(payloadObj);
+    const parsed = new URL(webhookUrl);
+    const reqLib = parsed.protocol === 'https:' ? https : http;
+    const req = reqLib.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    });
+    req.on('error', () => {});
+    req.write(payload);
+    req.end();
+  } catch(e){}
+}
+
+// Milestone Notification Dispatcher (Verified Root Agent Dispatch)
+function sendMilestoneNotification(agent, taskTitle, summary, actionNeeded, status = 'completed', targetDir = process.cwd()) {
+  const cfg = loadConfig();
+  const agentTitles = {
+    claude: 'Claude Code',
+    codex: 'OpenAI Codex',
+    antigravity: 'Google Antigravity',
+    opencode: 'OpenCode',
+    test: 'AI-Alarm Test'
+  };
+  const agentTitle = agentTitles[agent] || agent || 'AI Agent';
+  const notifTitle = cfg.notification_title || 'AI-Alarm';
+  const task = taskTitle || 'Task Update';
+  const sum = summary || 'Work completed successfully.';
+  const act = actionNeeded || 'No immediate action needed.';
+  const stat = status || 'completed';
+
+  const { projectName, branch, timestamp, dir } = getSystemContext(targetDir);
+
+  // Desktop Toast
+  if (cfg.desktop_notifications !== false) {
+    const bannerMsg = `[${projectName}] ${task}`;
+    if (process.platform === 'darwin') {
+      const soundName = cfg.notification_sound ? 'Submarine' : '';
+      spawn('osascript', ['-e', `display notification "${sum.replace(/"/g, '\\"')}" with title "${notifTitle}: ${agentTitle}" subtitle "${bannerMsg.replace(/"/g, '\\"')}" sound name "${soundName}"`], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    } else if (process.platform === 'win32') {
+      const psScript = `
+        try {
+          [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+          $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+          $xml = [xml]$template.GetXml()
+          $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("${notifTitle}: ${agentTitle}")) > $null
+          $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("${bannerMsg} - ${sum}")) > $null
+          $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
+          $toastXml.LoadXml($xml.OuterXml)
+          $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
+          [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("${notifTitle}").Show($toast)
+        } catch {}
+      `;
+      spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    } else {
+      spawn('notify-send', [`${notifTitle}: ${agentTitle}`, `${bannerMsg}\n${sum}`, '--icon=dialog-information'], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    }
+  }
+
+  // Slack Webhook Dispatch
+  if (cfg.webhook_url) {
+    const isReview = stat === 'review_needed' || stat === 'attention_required';
+    const isFailed = stat === 'failed' || stat === 'error';
+
+    const badge = isReview ? '🚨 [ATTENTION REQUIRED]' : (isFailed ? '⚠️ [TASK BLOCKED]' : '🏁 [MISSION COMPLETE]');
+    const statusText = isReview ? '⚠️ Review / Decision Required' : (isFailed ? '❌ Blocked / Failed' : '✅ Completed');
+    const headerText = `${isReview ? '🚨' : (isFailed ? '⚠️' : '🏁')} ${agentTitle}: ${task}`;
+
+    const fallbackText = `${badge} *${agentTitle}*\n📋 *Task:* ${task}\n📦 *Project:* \`${projectName}\` (\`${branch}\`)\n🕒 *Time:* ${timestamp}\n👉 *Action:* ${act}\n📍 *Dir:* \`${dir}\``;
+
+    const payloadObj = {
+      text: fallbackText,
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: headerText.slice(0, 150),
+            emoji: true
+          }
+        },
+        {
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: '🛡️ *Verified Root Milestone* • Not a transient sub-agent'
+            }
+          ]
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*Agent:*\n🤖 ${agentTitle}` },
+            { type: 'mrkdwn', text: `*Status:*\n${statusText}` },
+            { type: 'mrkdwn', text: `*Project & Branch:*\n📦 \`${projectName}\` (\`${branch}\`)` },
+            { type: 'mrkdwn', text: `*Timestamp:*\n🕒 ${timestamp}` }
+          ]
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*What Was Accomplished:*\n${sum}`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*👉 Action Needed from You:*\n${act}`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Working Directory:*\n📂 \`${dir}\``
+          }
+        }
+      ]
+    };
+
+    sendSlackPayload(cfg.webhook_url, payloadObj);
+  }
+}
+
+// Routine Desktop Notification Dispatcher (Triggered on routine stop hooks)
 function sendDesktopNotification(agent, customMsg) {
   const cfg = loadConfig();
-  if (cfg.desktop_notifications === false) return;
 
   const agentTitles = {
     claude: 'Claude Code',
@@ -122,62 +293,51 @@ function sendDesktopNotification(agent, customMsg) {
     opencode: 'OpenCode',
     test: 'AI-Alarm Test'
   };
-  const title = agentTitles[agent] || 'AI Agent';
+  const title = agentTitles[agent] || agent || 'AI Agent';
   const notifTitle = cfg.notification_title || 'AI-Alarm';
   const msg = customMsg || `Task completed by ${title}!`;
 
-  if (process.platform === 'darwin') {
-    const soundName = cfg.notification_sound ? 'Submarine' : '';
-    spawn('osascript', ['-e', `display notification "${msg.replace(/"/g, '\\"')}" with title "${notifTitle.replace(/"/g, '\\"')}" subtitle "Task Finished" sound name "${soundName}"`], {
-      detached: true,
-      stdio: 'ignore'
-    }).unref();
-  } else if (process.platform === 'win32') {
-    const psScript = `
-      try {
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-        $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-        $xml = [xml]$template.GetXml()
-        $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("${notifTitle.replace(/"/g, '`"')}")) > $null
-        $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("${msg.replace(/"/g, '`"')}")) > $null
-        $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $toastXml.LoadXml($xml.OuterXml)
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("${notifTitle.replace(/"/g, '`"')}").Show($toast)
-      } catch {}
-    `;
-    spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
-      detached: true,
-      stdio: 'ignore'
-    }).unref();
-  } else {
-    // Linux / BSD
-    spawn('notify-send', [notifTitle, msg, '--icon=dialog-information'], {
-      detached: true,
-      stdio: 'ignore'
-    }).unref();
+  if (cfg.desktop_notifications !== false) {
+    if (process.platform === 'darwin') {
+      const soundName = cfg.notification_sound ? 'Submarine' : '';
+      spawn('osascript', ['-e', `display notification "${msg.replace(/"/g, '\\"')}" with title "${notifTitle.replace(/"/g, '\\"')}" subtitle "Task Finished" sound name "${soundName}"`], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    } else if (process.platform === 'win32') {
+      const psScript = `
+        try {
+          [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+          $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+          $xml = [xml]$template.GetXml()
+          $xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("${notifTitle.replace(/"/g, '`"')}")) > $null
+          $xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("${msg.replace(/"/g, '`"')}")) > $null
+          $toastXml = New-Object Windows.Data.Xml.Dom.XmlDocument
+          $toastXml.LoadXml($xml.OuterXml)
+          $toast = [Windows.UI.Notifications.ToastNotification]::new($toastXml)
+          [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("${notifTitle.replace(/"/g, '`"')}").Show($toast)
+        } catch {}
+      `;
+      spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    } else {
+      spawn('notify-send', [notifTitle, msg, '--icon=dialog-information'], {
+        detached: true,
+        stdio: 'ignore'
+      }).unref();
+    }
   }
 
-  // Webhook notification (Slack / Discord / Custom incoming webhook)
-  if (cfg.webhook_url && /^https?:\/\//i.test(cfg.webhook_url)) {
-    try {
-      const payload = JSON.stringify({ text: `🔔 [${notifTitle}] ${msg}` });
-      const parsed = new URL(cfg.webhook_url);
-      const reqLib = parsed.protocol === 'https:' ? https : http;
-      const req = reqLib.request({
-        hostname: parsed.hostname,
-        port: parsed.port,
-        path: parsed.pathname + parsed.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
-        }
-      });
-      req.on('error', () => {});
-      req.write(payload);
-      req.end();
-    } catch(e){}
+  // Routine webhooks are disabled by default to prevent parallel subagent spam.
+  // Use 'alarm milestone' for official root agent milestone dispatches.
+  if (cfg.webhook_url && cfg.routine_webhook === true) {
+    const { projectName, branch, timestamp, dir } = getSystemContext(process.cwd());
+    const payloadObj = {
+      text: `🔔 [${notifTitle}] ${msg}\n📦 \`${projectName}\` (\`${branch}\`) • 🕒 ${timestamp}\n📍 \`${dir}\``
+    };
+    sendSlackPayload(cfg.webhook_url, payloadObj);
   }
 }
 
@@ -755,6 +915,54 @@ if (['unmute', '--unmute'].includes(cmd)) {
   process.exit(0);
 }
 
+// 4b. Milestone & Team Notification (Verified root agent dispatch)
+if (['milestone', '--milestone'].includes(cmd)) {
+  const mArgs = args.slice(1);
+  let taskTitle = 'Task Completed';
+  let summary = 'All objectives accomplished successfully.';
+  let actionNeeded = 'No immediate action required.';
+  let status = 'completed';
+  let agentName = '';
+  let targetDir = process.cwd();
+
+  for (let i = 0; i < mArgs.length; i++) {
+    const a = mArgs[i];
+    if (a === '--task' || a === '-t') {
+      taskTitle = mArgs[++i] || taskTitle;
+    } else if (a === '--summary' || a === '-s') {
+      summary = mArgs[++i] || summary;
+    } else if (a === '--action' || a === '-a' || a === '--action-needed') {
+      actionNeeded = mArgs[++i] || actionNeeded;
+    } else if (a === '--status') {
+      status = mArgs[++i] || status;
+    } else if (a === '--agent') {
+      agentName = mArgs[++i] || agentName;
+    } else if (a === '--dir' || a === '-d') {
+      targetDir = mArgs[++i] || targetDir;
+    } else if (!a.startsWith('-')) {
+      if (taskTitle === 'Task Completed') {
+        taskTitle = a;
+      } else if (summary === 'All objectives accomplished successfully.') {
+        summary = a;
+      } else if (actionNeeded === 'No immediate action required.') {
+        actionNeeded = a;
+      }
+    }
+  }
+
+  if (!agentName) {
+    if (process.env.ANTIGRAVITY_AGENT || process.env.ANTIGRAVITY_APP_ROOT) agentName = 'antigravity';
+    else if (process.env.CLAUDE_SESSION_ID) agentName = 'claude';
+    else if (process.env.CODEX_SESSION_ID) agentName = 'codex';
+    else agentName = 'antigravity';
+  }
+
+  console.log('📢 Dispatching team milestone notification...');
+  sendMilestoneNotification(agentName, taskTitle, summary, actionNeeded, status, targetDir);
+  console.log('✓ Verified milestone notification dispatched to Slack and desktop.');
+  process.exit(0);
+}
+
 // 5. Desktop Notifications Management
 if (['notify', 'notification', '--notify'].includes(cmd)) {
   const cfg = loadConfig();
@@ -767,6 +975,20 @@ if (['notify', 'notification', '--notify'].includes(cmd)) {
     cfg.desktop_notifications = false;
     saveConfig(cfg);
     console.log('🔕 Desktop notification banners disabled.');
+  } else if (sub === 'routine') {
+    const rOpt = (args[2] || '').toLowerCase();
+    if (['on', 'true', '1', 'enable'].includes(rOpt)) {
+      cfg.routine_webhook = true;
+      saveConfig(cfg);
+      console.log('🔔 Routine Stop hook webhooks enabled (every subagent stop sends to Slack).');
+    } else if (['off', 'false', '0', 'disable'].includes(rOpt)) {
+      cfg.routine_webhook = false;
+      saveConfig(cfg);
+      console.log('🔕 Routine Stop hook webhooks disabled (Slack reserved for "alarm milestone").');
+    } else {
+      console.log(`Routine Stop hook Slack alerts: ${cfg.routine_webhook ? 'Enabled 🔔' : 'Disabled 🔕 (Milestones only)'}`);
+      console.log('Toggle with: alarm notify routine [on|off]');
+    }
   } else if (sub === 'sound') {
     const soundOpt = (args[2] || '').toLowerCase();
     if (['on', 'true', '1', 'enable'].includes(soundOpt)) {
@@ -810,9 +1032,9 @@ if (['notify', 'notification', '--notify'].includes(cmd)) {
       console.log('💡 Test with: alarm notify test');
     }
   } else if (sub === 'test') {
-    console.log('🚀 Sending test notification...');
-    sendDesktopNotification('test', 'This is a test notification from AI-Alarm!');
-    console.log('✓ Test notification dispatched (desktop toast & webhook if configured).');
+    console.log('🚀 Sending verified test milestone notification...');
+    sendMilestoneNotification('test', 'AI-Alarm Test Milestone', 'Testing rich Slack Block Kit notification with system context.', 'Verify that Slack shows the verified root milestone badge, project, branch, and time.', 'completed', process.cwd());
+    console.log('✓ Test notification dispatched (desktop toast & Slack Block Kit card).');
   } else {
     console.log(`
 ╔═══════════════════════════════════════════════════════════════════╗
@@ -823,10 +1045,12 @@ if (['notify', 'notification', '--notify'].includes(cmd)) {
   Banner Chime:       ${cfg.notification_sound ? 'Enabled 🔊' : 'Silent 🔇'}
   Banner Title:       ${cfg.notification_title || 'AI-Alarm'}
   Webhook Alert:      ${cfg.webhook_url ? `Configured 🌐 (${cfg.webhook_url})` : 'None ⚪'}
+  Routine Hook Post:  ${cfg.routine_webhook ? 'Enabled (Every subagent stop sends to Slack)' : 'Disabled (Clean mode: only "alarm milestone" sends to Slack)'}
 
   AVAILABLE COMMANDS:
     alarm notify on               Enable desktop notification banners
     alarm notify off              Disable desktop notification banners
+    alarm notify routine on|off   Toggle Slack posting on routine subagent stop hooks
     alarm notify sound on|off     Toggle system chime in notification toasts
     alarm notify title <text>     Customize notification banner title
     alarm notify webhook <url>    Set Slack/Discord incoming webhook URL

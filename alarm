@@ -45,6 +45,156 @@ set_config_val() {
   ' "$CONFIG_FILE" "$key" "$val" 2>/dev/null || true
 }
 
+send_slack_payload() {
+  local webhook_url="$1"
+  local json_payload="$2"
+  if [ -n "$webhook_url" ] && [ -n "$json_payload" ]; then
+    (curl -s -X POST -H 'Content-type: application/json' \
+      --data "$json_payload" \
+      "$webhook_url" >/dev/null 2>&1 &)
+  fi
+}
+
+get_system_context() {
+  local target_dir="${1:-$PWD}"
+  [ -d "$target_dir" ] || target_dir="$PWD"
+
+  local git_root
+  git_root="$(git -C "$target_dir" rev-parse --show-toplevel 2>/dev/null || echo "$target_dir")"
+  local proj_name
+  proj_name="$(basename "$git_root")"
+  local branch
+  branch="$(git -C "$target_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "no git")"
+  local ts
+  ts="$(date "+%Y-%m-%d %H:%M:%S %Z")"
+
+  echo "$proj_name|$branch|$ts|$target_dir"
+}
+
+send_milestone_notification() {
+  local agent_name="${1:-}"
+  local task_title="${2:-Task Update}"
+  local summary="${3:-Work completed successfully.}"
+  local action_needed="${4:-No immediate action needed.}"
+  local status="${5:-completed}"
+  local target_dir="${6:-$PWD}"
+
+  local DESKTOP_NOTIFY="$(get_config_val "desktop_notifications" "true")"
+  local NOTIF_SOUND="$(get_config_val "notification_sound" "false")"
+  local NOTIF_TITLE="$(get_config_val "notification_title" "AI-Alarm")"
+  local WEBHOOK_URL="$(get_config_val "webhook_url" "")"
+
+  local agent_title="AI Agent"
+  case "$agent_name" in
+    claude) agent_title="Claude Code" ;;
+    codex) agent_title="OpenAI Codex" ;;
+    antigravity) agent_title="Google Antigravity" ;;
+    opencode) agent_title="OpenCode" ;;
+    test) agent_title="AI-Alarm Test" ;;
+    *) [ -n "$agent_name" ] && agent_title="$agent_name" ;;
+  esac
+
+  local ctx
+  ctx="$(get_system_context "$target_dir")"
+  IFS='|' read -r proj_name branch ts resolved_dir <<< "$ctx"
+
+  # Native Desktop Banner
+  if [ "$DESKTOP_NOTIFY" != "false" ]; then
+    local mac_sound=""
+    [ "$NOTIF_SOUND" = "true" ] && mac_sound="Submarine"
+    local banner_msg="[${proj_name}] ${task_title}"
+    if [[ "$OSTYPE" == "darwin"* ]] && command -v osascript >/dev/null 2>&1; then
+      (osascript -e "display notification \"${summary}\" with title \"${NOTIF_TITLE}: ${agent_title}\" subtitle \"${banner_msg}\" sound name \"${mac_sound}\"" >/dev/null 2>&1 &)
+    elif command -v notify-send >/dev/null 2>&1; then
+      (notify-send "${NOTIF_TITLE}: ${agent_title}" "${banner_msg}\n${summary}" --icon=dialog-information >/dev/null 2>&1 &)
+    fi
+  fi
+
+  # Rich Slack Webhook Notification
+  if [ -n "$WEBHOOK_URL" ]; then
+    local payload
+    payload="$(node -e '
+      const agent = process.argv[1];
+      const task = process.argv[2];
+      const summary = process.argv[3];
+      const action = process.argv[4];
+      const status = process.argv[5];
+      const project = process.argv[6];
+      const branch = process.argv[7];
+      const timestamp = process.argv[8];
+      const dir = process.argv[9];
+      const notifTitle = process.argv[10];
+
+      const isReview = status === "review_needed" || status === "attention_required";
+      const isFailed = status === "failed" || status === "error";
+
+      const badge = isReview ? "🚨 [ATTENTION REQUIRED]" : (isFailed ? "⚠️ [TASK BLOCKED]" : "🏁 [MISSION COMPLETE]");
+      const statusText = isReview ? "⚠️ Review / Decision Required" : (isFailed ? "❌ Blocked / Failed" : "✅ Completed");
+      const headerText = `${isReview ? "🚨" : (isFailed ? "⚠️" : "🏁")} ${agent}: ${task}`;
+
+      const fallbackText = `${badge} *${agent}*\n📋 *Task:* ${task}\n📦 *Project:* \`${project}\` (\`${branch}\`)\n🕒 *Time:* ${timestamp}\n👉 *Action:* ${action}\n📍 *Dir:* \`${dir}\``;
+
+      const body = {
+        text: fallbackText,
+        blocks: [
+          {
+            type: "header",
+            text: {
+              type: "plain_text",
+              text: headerText.slice(0, 150),
+              emoji: true
+            }
+          },
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: "🛡️ *Verified Root Milestone* • Not a transient sub-agent"
+              }
+            ]
+          },
+          {
+            type: "section",
+            fields: [
+              { type: "mrkdwn", text: `*Agent:*\n🤖 ${agent}` },
+              { type: "mrkdwn", text: `*Status:*\n${statusText}` },
+              { type: "mrkdwn", text: `*Project & Branch:*\n📦 \`${project}\` (\`${branch}\`)` },
+              { type: "mrkdwn", text: `*Timestamp:*\n🕒 ${timestamp}` }
+            ]
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*What Was Accomplished:*\n${summary}`
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*👉 Action Needed from You:*\n${action}`
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*Working Directory:*\n📂 \`${dir}\``
+            }
+          }
+        ]
+      };
+      console.log(JSON.stringify(body));
+    ' "$agent_title" "$task_title" "$summary" "$action_needed" "$status" "$proj_name" "$branch" "$ts" "$resolved_dir" "$NOTIF_TITLE" 2>/dev/null || true)"
+
+    if [ -n "$payload" ]; then
+      send_slack_payload "$WEBHOOK_URL" "$payload"
+    fi
+  fi
+}
+
 send_desktop_notification() {
   local agent_name="${1:-}"
   local custom_msg="${2:-}"
@@ -52,6 +202,7 @@ send_desktop_notification() {
   local NOTIF_SOUND="$(get_config_val "notification_sound" "false")"
   local NOTIF_TITLE="$(get_config_val "notification_title" "AI-Alarm")"
   local WEBHOOK_URL="$(get_config_val "webhook_url" "")"
+  local ROUTINE_WEBHOOK="$(get_config_val "routine_webhook" "false")"
 
   local agent_title="AI Agent"
   case "$agent_name" in
@@ -75,10 +226,32 @@ send_desktop_notification() {
     fi
   fi
 
-  if [ -n "$WEBHOOK_URL" ]; then
-    (curl -s -X POST -H 'Content-type: application/json' \
-      --data "{\"text\":\"🔔 [${NOTIF_TITLE}] ${msg}\"}" \
-      "$WEBHOOK_URL" >/dev/null 2>&1 &)
+  # Routine webhooks are silenced by default to prevent subagent flooding.
+  # Use 'alarm milestone' for verified root agent notifications.
+  if [ -n "$WEBHOOK_URL" ] && [ "$ROUTINE_WEBHOOK" = "true" ]; then
+    local ctx
+    ctx="$(get_system_context "$PWD")"
+    IFS='|' read -r proj_name branch ts resolved_dir <<< "$ctx"
+
+    local routine_payload
+    routine_payload="$(node -e '
+      const agent = process.argv[1];
+      const msg = process.argv[2];
+      const project = process.argv[3];
+      const branch = process.argv[4];
+      const timestamp = process.argv[5];
+      const dir = process.argv[6];
+      const notifTitle = process.argv[7];
+
+      const body = {
+        text: `🔔 [${notifTitle}] ${msg}\n📦 \`${project}\` (\`${branch}\`) • 🕒 ${timestamp}\n📍 \`${dir}\``
+      };
+      console.log(JSON.stringify(body));
+    ' "$agent_title" "$msg" "$proj_name" "$branch" "$ts" "$resolved_dir" "$NOTIF_TITLE" 2>/dev/null || true)"
+
+    if [ -n "$routine_payload" ]; then
+      send_slack_payload "$WEBHOOK_URL" "$routine_payload"
+    fi
   fi
 }
 
@@ -113,12 +286,16 @@ COMMANDS & OPTIONS:
     alarm volume [0-100]      View or adjust alert playback volume (0-100%)
     alarm mute                Silence audio alerts (desktop notifications still fire)
     alarm unmute              Restore audio alerts
+    alarm milestone [OPTIONS] Dispatch verified root milestone & team status to Slack
+                              Options: --task <name>, --summary <text>, --action <text>,
+                                       --status <completed|review_needed|failed>, --agent <name>
     alarm notify              Notification manager dashboard & settings
     alarm notify [on|off]     Toggle native desktop notification banners
+    alarm notify routine [on|off] Toggle Slack webhooks on routine subagent/stop hooks
     alarm notify sound [on|off] Toggle system sound inside notification toast
     alarm notify title <text> Set custom notification banner title
     alarm notify webhook <url> Configure Slack / Discord incoming webhook alert
-    alarm notify test         Dispatch test notification toast & webhook ping
+    alarm notify test         Dispatch verified test milestone card to Slack & desktop toast
     alarm --select [agent]    Interactive arrow-key sound selector (-s)
     alarm search <query>      Search sounds by title, description, or tag
     alarm update              Download latest community sounds from GitHub (sync)
@@ -237,6 +414,74 @@ if [ "${1:-}" = "unmute" ] || [ "${1:-}" = "--unmute" ]; then
   exit 0
 fi
 
+# Milestone & Team notification (Verified root agent dispatch)
+if [ "${1:-}" = "milestone" ] || [ "${1:-}" = "--milestone" ]; then
+  shift
+  TASK_TITLE="Task Completed"
+  SUMMARY="All objectives accomplished successfully."
+  ACTION_NEEDED="No immediate action required."
+  STATUS="completed"
+  AGENT_NAME=""
+  TARGET_DIR="$PWD"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --task|-t)
+        TASK_TITLE="$2"
+        shift 2
+        ;;
+      --summary|-s)
+        SUMMARY="$2"
+        shift 2
+        ;;
+      --action|-a|--action-needed)
+        ACTION_NEEDED="$2"
+        shift 2
+        ;;
+      --status)
+        STATUS="$2"
+        shift 2
+        ;;
+      --agent)
+        AGENT_NAME="$2"
+        shift 2
+        ;;
+      --dir|-d)
+        TARGET_DIR="$2"
+        shift 2
+        ;;
+      *)
+        if [ "$TASK_TITLE" = "Task Completed" ]; then
+          TASK_TITLE="$1"
+        elif [ "$SUMMARY" = "All objectives accomplished successfully." ]; then
+          SUMMARY="$1"
+        elif [ "$ACTION_NEEDED" = "No immediate action required." ]; then
+          ACTION_NEEDED="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  # Auto-detect agent if not passed
+  if [ -z "$AGENT_NAME" ]; then
+    if [ -n "${ANTIGRAVITY_AGENT:-}" ] || [ -n "${ANTIGRAVITY_APP_ROOT:-}" ]; then
+      AGENT_NAME="antigravity"
+    elif [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+      AGENT_NAME="claude"
+    elif [ -n "${CODEX_SESSION_ID:-}" ]; then
+      AGENT_NAME="codex"
+    else
+      AGENT_NAME="antigravity"
+    fi
+  fi
+
+  echo "📢 Dispatching team milestone notification..."
+  send_milestone_notification "$AGENT_NAME" "$TASK_TITLE" "$SUMMARY" "$ACTION_NEEDED" "$STATUS" "$TARGET_DIR"
+  echo "✓ Verified milestone notification dispatched to Slack and desktop."
+  exit 0
+fi
+
 # Desktop notifications management
 if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--notify" ]; then
   case "${2:-}" in
@@ -247,6 +492,23 @@ if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--n
     off|false|0|disable)
       set_config_val "desktop_notifications" "false"
       echo "🔕 Desktop notification banners disabled."
+      ;;
+    routine)
+      case "${3:-}" in
+        on|true|1|enable)
+          set_config_val "routine_webhook" "true"
+          echo "🔔 Routine Stop hook webhooks enabled (will send to Slack on every stop hook)."
+          ;;
+        off|false|0|disable)
+          set_config_val "routine_webhook" "false"
+          echo "🔕 Routine Stop hook webhooks disabled (Slack reserved for 'alarm milestone')."
+          ;;
+        *)
+          CUR_RT="$(get_config_val "routine_webhook" "false")"
+          echo "Routine Stop hook Slack alerts: $([ "$CUR_RT" = "true" ] && echo 'Enabled 🔔' || echo 'Disabled 🔕 (Milestones only)')"
+          echo "Toggle with: alarm notify routine [on|off]"
+          ;;
+      esac
       ;;
     sound)
       case "${3:-}" in
@@ -293,15 +555,16 @@ if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--n
       fi
       ;;
     test)
-      echo "🚀 Sending test notification..."
-      send_desktop_notification "test" "This is a test notification from AI-Alarm!"
-      echo "✓ Test notification dispatched (desktop toast & webhook if configured)."
+      echo "🚀 Sending verified test milestone notification..."
+      send_milestone_notification "test" "AI-Alarm Test Milestone" "Testing rich Slack Block Kit notification with system context." "Verify that Slack shows the verified root milestone badge, project, branch, and time." "completed" "$PWD"
+      echo "✓ Test notification dispatched (desktop toast & Slack Block Kit card)."
       ;;
     *)
       CUR_NOTIF="$(get_config_val "desktop_notifications" "true")"
       CUR_SND="$(get_config_val "notification_sound" "false")"
       CUR_TITLE="$(get_config_val "notification_title" "AI-Alarm")"
       CUR_HOOK="$(get_config_val "webhook_url" "")"
+      CUR_RT="$(get_config_val "routine_webhook" "false")"
 
       echo ""
       echo "╔═══════════════════════════════════════════════════════════════════╗"
@@ -312,10 +575,12 @@ if [ "${1:-}" = "notify" ] || [ "${1:-}" = "notification" ] || [ "${1:-}" = "--n
       echo "  Banner Chime:       $([ "$CUR_SND" = "true" ] && echo "Enabled 🔊" || echo "Silent 🔇")"
       echo "  Banner Title:       $CUR_TITLE"
       echo "  Webhook Alert:      $([ -n "$CUR_HOOK" ] && echo "Configured 🌐 ($CUR_HOOK)" || echo "None ⚪")"
+      echo "  Routine Hook Post:  $([ "$CUR_RT" = "true" ] && echo "Enabled (Every subagent stop sends to Slack)" || echo "Disabled (Clean mode: only 'alarm milestone' sends to Slack)")"
       echo ""
       echo "  AVAILABLE COMMANDS:"
       echo "    alarm notify on               Enable desktop notification banners"
       echo "    alarm notify off              Disable desktop notification banners"
+      echo "    alarm notify routine on|off   Toggle Slack posting on routine subagent stop hooks"
       echo "    alarm notify sound on|off     Toggle system chime in notification toasts"
       echo "    alarm notify title <text>     Customize notification banner title"
       echo "    alarm notify webhook <url>    Set Slack/Discord incoming webhook URL"
